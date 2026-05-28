@@ -154,44 +154,61 @@ const femaleTemplates = {
       { name: "Mobility Flow（灵活性训练）", sets: 1, reps: "8 min", rest: "-", note: "Open hips and release lower-back tension." },
     ],
   },
+  balletRecovery: {
+    title: "Ballet Night Recovery（芭蕾日晚恢复）",
+    workouts: [
+      { name: "Ballet Class（芭蕾）", sets: 1, reps: "60-90 min", rest: "-", note: "Enjoy class and keep hydration steady." },
+      { name: "Calf + Hip Flexor Stretch（小腿+髋屈肌拉伸）", sets: 1, reps: "8-10 min", rest: "-", note: "Reduce tightness after pointe/barre work." },
+      { name: "Core Breathing Reset（核心呼吸恢复）", sets: 1, reps: "5 min", rest: "-", note: "Nasal breathing and gentle trunk control." },
+    ],
+  },
 };
 
-const maleScheduleKeys = [
-  "chestTriA", "backBiA", "shoulderLegA", "recoveryCore", "basketball", "upperHypertrophy", "basketball",
-  "backBiB", "chestTriB", "shoulderLegB", "lightRecovery", "basketball", "upperHypertrophy", "basketball",
-  "chestTriA", "backBiA", "shoulderLegB", "recoveryCore", "basketball", "upperHypertrophy", "basketball",
-];
+const maleWeekdayCycle = ["chestTriA", "backBiA", "shoulderLegA", "recoveryCore", "basketball", "upperHypertrophy", "basketball"];
+const femaleWeekdayCycle = ["lowerA", "upperA", "cardioRecovery", "balletRecovery", "lowerB", "upperB", "activeRecovery"];
 
-const femaleScheduleKeys = [
-  "lowerA", "upperA", "cardioRecovery", "lowerB", "upperB", "activeRecovery", "cardioRecovery",
-  "lowerA", "upperA", "cardioRecovery", "lowerB", "upperB", "activeRecovery", "cardioRecovery",
-  "lowerA", "upperB", "cardioRecovery", "lowerB", "upperA", "activeRecovery", "cardioRecovery",
-];
+function toDateOnly(dateValue) {
+  const date = new Date(dateValue || new Date().toISOString().slice(0, 10));
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
 
-export const malePlan = maleScheduleKeys.map((key, index) => {
-  const base = maleTemplates[key];
+function getDateForDay(startDate, day) {
+  const date = toDateOnly(startDate);
+  date.setDate(date.getDate() + (day - 1));
+  return date;
+}
+
+function getWeekdayIndex(date) {
+  const jsDay = date.getDay(); // 0=Sun ... 6=Sat
+  return jsDay === 0 ? 6 : jsDay - 1; // 0=Mon ... 6=Sun
+}
+
+function buildPlanItem(day, key, templates) {
+  const base = templates[key];
   return {
-    title: `Day ${index + 1} · ${base.title}`,
+    title: `Day ${day} · ${base.title}`,
     workouts: base.workouts,
     habits: dailyHabits,
   };
-});
+}
 
-export const femalePlan = femaleScheduleKeys.map((key, index) => {
-  const base = femaleTemplates[key];
-  return {
-    title: `Day ${index + 1} · ${base.title}`,
-    workouts: base.workouts,
-    habits: dailyHabits,
-  };
-});
+function buildDynamicPlan(role, day, challengeStartDate) {
+  const targetDate = getDateForDay(challengeStartDate, day);
+  const weekday = getWeekdayIndex(targetDate);
+  if (role === ROLE_MALE) {
+    const key = maleWeekdayCycle[weekday];
+    return buildPlanItem(day, key, maleTemplates);
+  }
+  const key = femaleWeekdayCycle[weekday];
+  return buildPlanItem(day, key, femaleTemplates);
+}
 
 export function getDefaultGoal(role) {
   return role === ROLE_MALE ? "可见腹肌 + 线条感 + 精瘦运动体态" : "臀腿增长 + 腿部塑形 + 肩背轻线条";
 }
 
-export function getBasePlan(role, day) {
-  const plans = role === ROLE_MALE ? malePlan : femalePlan;
-  const index = (day - 1) % plans.length;
-  return plans[index];
+export function getBasePlan(role, day, challengeStartDate) {
+  const safeDay = Math.min(21, Math.max(1, day));
+  return buildDynamicPlan(role, safeDay, challengeStartDate);
 }

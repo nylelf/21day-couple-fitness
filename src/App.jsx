@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   Circle,
   Cloud,
@@ -10,7 +12,6 @@ import {
   MessageCircle,
   RefreshCw,
   Share2,
-  Trophy,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -59,6 +60,83 @@ function calcCurrentDay(challengeStartDate) {
   return Math.min(21, Math.max(1, diff + 1));
 }
 
+function getDateKey(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
+}
+
+function addDays(dateValue, days) {
+  const d = new Date(dateValue);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function getChallengeDateForDay(challengeStartDate, day) {
+  return addDays(challengeStartDate, day - 1);
+}
+
+function formatMonthTitle(date) {
+  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(date);
+}
+
+function normalizePreferenceText(text) {
+  return (text || "").trim();
+}
+
+function reduceSetsValue(sets) {
+  if (typeof sets === "number") return Math.max(1, sets - 1);
+  return sets;
+}
+
+function personalizePlan(plan, preferenceText) {
+  const text = normalizePreferenceText(preferenceText).toLowerCase();
+  if (!text) return plan;
+
+  let workouts = [...(plan.workouts || [])];
+  let habits = [...(plan.habits || [])];
+  const tags = [];
+
+  if (/(30分钟|30 分钟|时间少|忙|quick)/.test(text)) {
+    workouts = workouts.slice(0, 4);
+    habits.push("Quick Session（30分钟内完成）");
+    tags.push("快速版");
+  }
+
+  if (/(新手|初学|beginner)/.test(text)) {
+    workouts = workouts.map((item) => ({ ...item, sets: reduceSetsValue(item.sets), note: `${item.note} Beginner-friendly: keep 2 reps in reserve.` }));
+    tags.push("新手版");
+  }
+
+  if (/(膝|knee)/.test(text)) {
+    workouts = workouts.map((item) =>
+      /(深蹲|腿举|跳|squat|leg press|jump)/i.test(item.name)
+        ? { ...item, note: `${item.note} Knee-care: reduce load 10-20% and keep pain-free range.` }
+        : item
+    );
+    habits.push("Knee Care（膝盖友好：训练后冰敷/拉伸）");
+    tags.push("膝盖友好");
+  }
+
+  if (/(腰|lower back|back pain)/.test(text)) {
+    workouts = workouts.map((item) =>
+      /(硬拉|deadlift|good morning)/i.test(item.name)
+        ? { ...item, note: `${item.note} Back-care: prioritize neutral spine and lighter load.` }
+        : item
+    );
+    habits.push("Back Care（下背恢复：核心激活+伸展）");
+    tags.push("腰背友好");
+  }
+
+  return {
+    ...plan,
+    title: tags.length ? `${plan.title} · ${tags.join("/")}` : plan.title,
+    workouts,
+    habits,
+  };
+}
+
 function generateInviteCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
@@ -79,11 +157,13 @@ function normalizeChallenge(data) {
       male: {
         name: data.users?.male?.name || "",
         goal: data.users?.male?.goal || getDefaultGoal(ROLE_MALE),
+        preferences: normalizePreferenceText(data.users?.male?.preferences),
         joinedAt: data.users?.male?.joinedAt || "",
       },
       female: {
         name: data.users?.female?.name || "",
         goal: data.users?.female?.goal || getDefaultGoal(ROLE_FEMALE),
+        preferences: normalizePreferenceText(data.users?.female?.preferences),
         joinedAt: data.users?.female?.joinedAt || "",
       },
     },
@@ -117,9 +197,9 @@ function normalizeCheckinEntry(entry) {
   };
 }
 
-function createChallenge(inviteCode, myRole, nickname) {
+function createChallenge(inviteCode, myRole, nickname, challengeStartDate, preferences = "") {
   const now = new Date().toISOString();
-  const startDate = now.slice(0, 10);
+  const startDate = challengeStartDate || now.slice(0, 10);
   const base = normalizeChallenge({
     inviteCode,
     challengeStartDate: startDate,
@@ -127,6 +207,7 @@ function createChallenge(inviteCode, myRole, nickname) {
       [myRole]: {
         name: nickname.trim(),
         goal: getDefaultGoal(myRole),
+        preferences: normalizePreferenceText(preferences),
         joinedAt: now,
       },
     },
@@ -152,23 +233,31 @@ export default function App() {
 
   const [createRole, setCreateRole] = useState(ROLE_MALE);
   const [createNickname, setCreateNickname] = useState("");
+  const [createPreferences, setCreatePreferences] = useState("");
+  const [createStartDate, setCreateStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [joinCode, setJoinCode] = useState("");
   const [joinRole, setJoinRole] = useState(ROLE_FEMALE);
   const [joinNickname, setJoinNickname] = useState("");
+  const [joinPreferences, setJoinPreferences] = useState("");
+  const [stayOnLanding, setStayOnLanding] = useState(false);
+  const restoreRequestVersionRef = useRef(0);
+  const [calendarMonthDate, setCalendarMonthDate] = useState(new Date());
 
   const currentDay = challenge ? calcCurrentDay(challenge.challengeStartDate) : 1;
+  const hasStarted = challenge ? getDateKey(new Date()) >= getDateKey(challenge.challengeStartDate) : true;
   const viewingRole = activeRole;
-  const canEdit = challenge && viewingRole === myRole && selectedDay === currentDay;
+  const canEdit = challenge && hasStarted && viewingRole === myRole && selectedDay === currentDay;
   const dKey = dayKey(selectedDay);
+  const getEffectivePlan = (role, day) => {
+    const key = dayKey(day);
+    const custom = challenge?.plans?.[role]?.[key];
+    const base = custom?.workouts?.length ? custom : getBasePlan(role, day, challenge?.challengeStartDate);
+    const pref = challenge?.users?.[role]?.preferences || "";
+    return personalizePlan(base, pref);
+  };
   const selectedPlan = useMemo(() => {
-    if (!challenge) return getBasePlan(viewingRole, selectedDay);
-    const base = getBasePlan(viewingRole, selectedDay);
-    const custom = challenge.plans?.[viewingRole]?.[dKey];
-    return {
-      title: custom?.title || base.title,
-      workouts: custom?.workouts?.length ? custom.workouts : base.workouts,
-      habits: custom?.habits?.length ? custom.habits : base.habits,
-    };
+    if (!challenge) return personalizePlan(getBasePlan(viewingRole, selectedDay), "");
+    return getEffectivePlan(viewingRole, selectedDay);
   }, [challenge, viewingRole, selectedDay, dKey]);
 
   const checkin = normalizeCheckinEntry(challenge?.checkins?.[viewingRole]?.[dKey]);
@@ -187,9 +276,7 @@ export default function App() {
       let done = 0;
       for (let day = 1; day <= DAYS; day += 1) {
         const key = dayKey(day);
-        const plan = challenge.plans?.[role]?.[key]?.workouts?.length
-          ? challenge.plans[role][key]
-          : getBasePlan(role, day);
+        const plan = getEffectivePlan(role, day);
         const dayCheckin = normalizeCheckinEntry(challenge.checkins?.[role]?.[key]);
         total += (plan.workouts?.length || 0) + (plan.habits?.length || 0);
         done += Object.values(dayCheckin.workouts || {}).filter(Boolean).length;
@@ -201,11 +288,12 @@ export default function App() {
   }, [challenge]);
 
   const dayPermissionLabel = useMemo(() => {
+    if (!hasStarted) return "挑战未开始，仅可预览";
     if (viewingRole !== myRole) return "对方记录，仅可查看";
     if (selectedDay < currentDay) return "历史记录，仅可查看";
     if (selectedDay > currentDay) return "未来计划，仅可预览";
     return "今日可打卡";
-  }, [viewingRole, myRole, selectedDay, currentDay]);
+  }, [hasStarted, viewingRole, myRole, selectedDay, currentDay]);
 
   function mutateChallenge(mutator, statusOnSuccess = "已同步到云端") {
     if (!challenge || !inviteCode) return;
@@ -222,7 +310,9 @@ export default function App() {
     setErrorMsg("");
   }
 
-  function applyChallengeSession(nextChallenge, role, code, nickname, statusText) {
+  function applyChallengeSession(nextChallenge, role, code, nickname, statusText, options = {}) {
+    const { force = false } = options;
+    if (stayOnLanding && !force) return;
     const normalized = normalizeChallenge(nextChallenge);
     const safeRole = role || ROLE_MALE;
     const resolvedNickname = normalized.users?.[safeRole]?.name || nickname || "";
@@ -241,6 +331,8 @@ export default function App() {
 
   async function fetchAndRestoreChallenge({ code, role, nickname, useDirectSingle = false }) {
     if (!code || !supabase) return false;
+    const requestVersion = ++restoreRequestVersionRef.current;
+    const isStale = () => requestVersion !== restoreRequestVersionRef.current;
     setSyncStatus("拉取最新数据...");
 
     if (useDirectSingle) {
@@ -249,6 +341,8 @@ export default function App() {
         .select("data")
         .eq("invite_code", code)
         .single();
+
+      if (isStale()) return false;
 
       if (error) {
         console.error("Supabase reconnect failed:", error);
@@ -275,6 +369,7 @@ export default function App() {
     }
 
     const result = await fetchChallengeByCode(code);
+    if (isStale()) return false;
     if (result.error) {
       setSyncStatus("云端读取失败");
       setNeedsReconnect(true);
@@ -301,6 +396,7 @@ export default function App() {
   }
 
   async function reconnectChallenge() {
+    setStayOnLanding(false);
     if (!supabase) {
       setSyncStatus("云端读取失败");
       setErrorMsg("Supabase 未配置");
@@ -324,8 +420,15 @@ export default function App() {
   async function handleCreateChallenge() {
     resetJoinCreateErrors();
     const name = createNickname.trim();
+    const preferences = normalizePreferenceText(createPreferences);
+    const todayKey = getDateKey(new Date());
+    const startDate = createStartDate || todayKey;
     if (!name) {
       setErrorMsg("请输入昵称");
+      return;
+    }
+    if (startDate < todayKey) {
+      setErrorMsg("开始日期只能选择今天或之后");
       return;
     }
     if (!supabase) {
@@ -341,13 +444,13 @@ export default function App() {
         attempts += 1;
         continue;
       }
-      const created = createChallenge(code, createRole, name);
+      const created = createChallenge(code, createRole, name, startDate, preferences);
       const saved = await saveChallengeToCloud(code, created);
       if (saved.error) {
         setErrorMsg("创建失败，请检查 Supabase challenges 表");
         return;
       }
-      applyChallengeSession(created, createRole, code, name, "挑战创建成功");
+      applyChallengeSession(created, createRole, code, name, "挑战创建成功", { force: true });
       return;
     }
     setErrorMsg("邀请码生成冲突过多，请重试");
@@ -357,6 +460,7 @@ export default function App() {
     resetJoinCreateErrors();
     const code = joinCode.trim().toUpperCase();
     const nickname = joinNickname.trim();
+    const preferences = normalizePreferenceText(joinPreferences);
     if (!code || code.length !== 6) {
       setErrorMsg("邀请码应为 6 位");
       return;
@@ -384,7 +488,24 @@ export default function App() {
     if (occupiedName) {
       // Allow returning user to reclaim the same role by matching nickname.
       if (occupiedName === nickname) {
-        applyChallengeSession(remote, joinRole, code, nickname, "已恢复你的挑战身份");
+        if (preferences) {
+          const reclaimed = {
+            ...remote,
+            users: {
+              ...remote.users,
+              [joinRole]: {
+                ...remote.users[joinRole],
+                preferences,
+              },
+            },
+          };
+          const saved = await saveChallengeToCloud(code, reclaimed);
+          if (!saved.error) {
+            applyChallengeSession(reclaimed, joinRole, code, nickname, "已恢复你的挑战身份", { force: true });
+            return;
+          }
+        }
+        applyChallengeSession(remote, joinRole, code, nickname, "已恢复你的挑战身份", { force: true });
         return;
       }
       setErrorMsg("这个角色已经被占用，请选择另一个角色。");
@@ -399,6 +520,7 @@ export default function App() {
           ...remote.users[joinRole],
           name: nickname,
           goal: remote.users[joinRole]?.goal || getDefaultGoal(joinRole),
+          preferences,
           joinedAt: new Date().toISOString(),
         },
       },
@@ -410,10 +532,12 @@ export default function App() {
       return;
     }
 
-    applyChallengeSession(updated, joinRole, code, nickname, "加入成功，已连接共享挑战");
+    applyChallengeSession(updated, joinRole, code, nickname, "加入成功，已连接共享挑战", { force: true });
   }
 
   function leaveChallenge() {
+    restoreRequestVersionRef.current += 1;
+    setStayOnLanding(false);
     clearLocalSession();
     setScreen("landing");
     setMyRole("");
@@ -426,6 +550,13 @@ export default function App() {
     setTab("today");
     setErrorMsg("");
     setSyncStatus(supabase ? "连接中..." : "本地模式：Supabase 未配置");
+  }
+
+  function backToLandingWithoutClearingSession() {
+    restoreRequestVersionRef.current += 1;
+    setStayOnLanding(true);
+    setScreen("landing");
+    setErrorMsg("");
   }
 
   function toggleWorkout(index) {
@@ -498,6 +629,20 @@ export default function App() {
     }));
   }
 
+  function updatePreferences(value) {
+    if (viewingRole !== myRole) return;
+    mutateChallenge((prev) => ({
+      ...prev,
+      users: {
+        ...prev.users,
+        [myRole]: {
+          ...prev.users[myRole],
+          preferences: value,
+        },
+      },
+    }));
+  }
+
   function copyInvite() {
     const text = `我们在做 21 天情侣健身挑战，邀请码：${inviteCode}\n你可以输入邀请码加入并选择你的身份。`;
     navigator.clipboard?.writeText(text);
@@ -505,9 +650,16 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!screen || screen !== "main" || !supabase) return;
+    if (!screen || screen !== "main" || !supabase || stayOnLanding) return;
     reconnectChallenge();
-  }, [screen]);
+  }, [screen, stayOnLanding]);
+
+  useEffect(() => {
+    if (!challenge?.challengeStartDate) return;
+    const start = new Date(challenge.challengeStartDate);
+    start.setDate(1);
+    setCalendarMonthDate(start);
+  }, [challenge?.challengeStartDate]);
 
   useEffect(() => {
     if (!supabase || !inviteCode || screen !== "main") return undefined;
@@ -545,10 +697,10 @@ export default function App() {
                 </div>
                 <div className="icon-pill"><Heart size={22} /></div>
               </div>
-              <Button className="primary-btn full-btn" onClick={() => { setScreen("create"); setCreateRole(ROLE_MALE); }}>
+              <Button className="primary-btn full-btn" onClick={() => { setScreen("create"); setCreateRole(ROLE_MALE); setCreateStartDate(new Date().toISOString().slice(0, 10)); setCreatePreferences(""); }}>
                 <Users size={16} />Create Couple Challenge
               </Button>
-              <Button className="ghost-btn full-btn" onClick={() => { setScreen("join"); setJoinRole(ROLE_FEMALE); }}>
+              <Button className="ghost-btn full-btn" onClick={() => { setScreen("join"); setJoinRole(ROLE_FEMALE); setJoinPreferences(""); }}>
                 <UserPlus size={16} />Join Challenge
               </Button>
               <div className="footer-note">创建者只需填写自己的身份和昵称，另一半用邀请码加入并填写自己的信息。</div>
@@ -576,6 +728,20 @@ export default function App() {
                 onChange={(event) => setCreateNickname(event.target.value)}
                 placeholder="输入你的昵称"
               />
+              <input
+                className="text-input"
+                type="date"
+                min={new Date().toISOString().slice(0, 10)}
+                value={createStartDate}
+                onChange={(event) => setCreateStartDate(event.target.value)}
+              />
+              <textarea
+                className="text-area"
+                value={createPreferences}
+                onChange={(event) => setCreatePreferences(event.target.value)}
+                placeholder="额外个性化需求（可选）：如每次30分钟、膝盖不适、偏新手、仅家用器械等"
+              />
+              <div className="footer-note">开始日期可选今天或未来日期。个性化需求会用于微调每天训练结构。</div>
               {errorMsg && <div className="error-line">{errorMsg}</div>}
               <Button className="primary-btn full-btn" onClick={handleCreateChallenge}>生成邀请码并创建</Button>
               <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); }}>返回</Button>
@@ -610,6 +776,12 @@ export default function App() {
                 onChange={(event) => setJoinNickname(event.target.value)}
                 placeholder="输入你的昵称"
               />
+              <textarea
+                className="text-area"
+                value={joinPreferences}
+                onChange={(event) => setJoinPreferences(event.target.value)}
+                placeholder="你的个性化需求（可选）：如时间少、初学者、膝盖或下背要保护"
+              />
               {errorMsg && <div className="error-line">{errorMsg}</div>}
               <Button className="primary-btn full-btn" onClick={handleJoinChallenge}>加入挑战</Button>
               <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); }}>返回</Button>
@@ -636,11 +808,13 @@ export default function App() {
                   </div>
                   <Button className="ghost-btn full-btn" onClick={reconnectChallenge}>重新连接挑战</Button>
                   <Button className="danger-btn full-btn" onClick={leaveChallenge}>退出当前挑战</Button>
+                  <Button className="ghost-btn full-btn" onClick={backToLandingWithoutClearingSession}>返回初始界面</Button>
                 </>
               ) : (
                 <>
                   <Button className="ghost-btn full-btn" onClick={reconnectChallenge}>重新连接挑战</Button>
                   <Button className="danger-btn full-btn" onClick={leaveChallenge}>退出当前挑战</Button>
+                  <Button className="ghost-btn full-btn" onClick={backToLandingWithoutClearingSession}>返回初始界面</Button>
                 </>
               )}
             </CardContent>
@@ -653,6 +827,8 @@ export default function App() {
   const meName = challenge.users[myRole]?.name || myNickname || roleLabel(myRole);
   const partner = oppositeRole(myRole);
   const partnerName = challenge.users[partner]?.name || roleLabel(partner);
+  const selectedChallengeDate = getChallengeDateForDay(challenge.challengeStartDate, selectedDay);
+  const challengeEndDateObj = getChallengeDateForDay(challenge.challengeStartDate, DAYS);
   const aiCoachText = myRole === ROLE_MALE
     ? completion >= 80
       ? "今天完成度很高，继续保持蛋白质与睡眠。周五/周日篮球日注意恢复。"
@@ -678,7 +854,8 @@ export default function App() {
           <CardContent className="card-content">
             <div className="sync-line"><Cloud size={16} /> {syncStatus}</div>
             <div className="identity-line">你当前身份：{roleLabel(myRole)}</div>
-            <div className="identity-line">今天是 Day {currentDay} / 21</div>
+            <div className="identity-line">挑战周期：{challenge.challengeStartDate} ~ {getDateKey(challengeEndDateObj)}</div>
+            <div className="identity-line">{hasStarted ? `今天是 Day ${currentDay} / 21` : `挑战将于 ${challenge.challengeStartDate} 开始`}</div>
             <div className="role-toggle-grid">
               <Button className={`role-btn ${activeRole === ROLE_MALE ? "is-active" : ""}`} onClick={() => setActiveRole(ROLE_MALE)}>
                 ♂ {challenge.users.male.name || "男生"}
@@ -714,8 +891,12 @@ export default function App() {
                 <div className="today-top">
                   <div>
                     <div className="day-label">Day {selectedDay} / 21</div>
+                    <div className="today-goal">{getDateKey(selectedChallengeDate)}</div>
                     <h2 className="today-title">{selectedPlan.title}</h2>
                     <p className="today-goal">{roleLabel(viewingRole)} ｜目标：{challenge.users[viewingRole].goal || getDefaultGoal(viewingRole)}</p>
+                    {challenge.users[viewingRole].preferences ? (
+                      <p className="today-goal">个性化：{challenge.users[viewingRole].preferences}</p>
+                    ) : null}
                   </div>
                   <div className="today-percent">
                     <div className="today-percent-value">{completion}%</div>
@@ -779,6 +960,13 @@ export default function App() {
                   onChange={(event) => updateGoal(event.target.value)}
                   disabled={viewingRole !== myRole}
                 />
+                <textarea
+                  className="text-area"
+                  value={challenge.users[viewingRole].preferences || ""}
+                  onChange={(event) => updatePreferences(event.target.value)}
+                  disabled={viewingRole !== myRole}
+                  placeholder="个性化需求：时间限制、训练经验、伤病保护、器械条件等"
+                />
               </CardContent>
             </Card>
 
@@ -801,29 +989,114 @@ export default function App() {
           <Card className="card glass-card">
             <CardContent className="card-content">
               <div className="calendar-header">
-                <h2 className="section-heading">21 天日历</h2>
-                <Trophy size={18} />
+                <h2 className="section-heading">{formatMonthTitle(calendarMonthDate)}</h2>
+                <div className="calendar-nav">
+                  <button
+                    className="calendar-nav-btn"
+                    aria-label="上个月"
+                    onClick={() =>
+                      setCalendarMonthDate((prev) => {
+                        const next = new Date(prev);
+                        next.setMonth(next.getMonth() - 1);
+                        return next;
+                      })
+                    }
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <button
+                    className="calendar-nav-btn"
+                    aria-label="下个月"
+                    onClick={() =>
+                      setCalendarMonthDate((prev) => {
+                        const next = new Date(prev);
+                        next.setMonth(next.getMonth() + 1);
+                        return next;
+                      })
+                    }
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
               </div>
               <div className="calendar-grid">
-                {Array.from({ length: DAYS }, (_, index) => {
-                  const day = index + 1;
-                  const k = dayKey(day);
-                  const plan = challenge.plans?.[viewingRole]?.[k]?.workouts?.length
-                    ? challenge.plans[viewingRole][k]
-                    : getBasePlan(viewingRole, day);
-                  const dayCheckin = normalizeCheckinEntry(challenge.checkins?.[viewingRole]?.[k]);
-                  const done = Object.values(dayCheckin.workouts || {}).filter(Boolean).length + Object.values(dayCheckin.habits || {}).filter(Boolean).length;
-                  const total = (plan.workouts?.length || 0) + (plan.habits?.length || 0);
-                  const pct = total ? Math.round((done / total) * 100) : 0;
-                  const stateClass = day === selectedDay ? "is-current" : pct >= 80 ? "is-great" : pct > 0 ? "is-mid" : "is-empty";
-                  return (
-                    <button key={day} className={`calendar-day ${stateClass}`} onClick={() => { setSelectedDay(day); setTab("today"); }}>
-                      {day}
-                    </button>
-                  );
-                })}
+                {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((label) => (
+                  <div key={label} className="calendar-day is-empty">{label}</div>
+                ))}
               </div>
-              <div className="calendar-tip">可查看 Day1-21 全部记录；仅当前身份的今日可编辑。</div>
+              <div className="calendar-grid">
+                {(() => {
+                  const monthStart = new Date(calendarMonthDate.getFullYear(), calendarMonthDate.getMonth(), 1);
+                  const monthEnd = new Date(calendarMonthDate.getFullYear(), calendarMonthDate.getMonth() + 1, 0);
+                  const monthDays = monthEnd.getDate();
+                  const startOffset = (monthStart.getDay() + 6) % 7;
+                  const cells = [];
+                  const selectedDateKey = getDateKey(selectedChallengeDate);
+
+                  for (let i = 0; i < startOffset; i += 1) {
+                    const prevDate = new Date(monthStart);
+                    prevDate.setDate(monthStart.getDate() - (startOffset - i));
+                    cells.push({ date: prevDate, inMonth: false });
+                  }
+
+                  for (let d = 1; d <= monthDays; d += 1) {
+                    cells.push({ date: new Date(calendarMonthDate.getFullYear(), calendarMonthDate.getMonth(), d), inMonth: true });
+                  }
+
+                  let tailDay = 1;
+                  while (cells.length % 7 !== 0) {
+                    const nextDate = new Date(calendarMonthDate.getFullYear(), calendarMonthDate.getMonth() + 1, tailDay);
+                    cells.push({ date: nextDate, inMonth: false });
+                    tailDay += 1;
+                  }
+
+                  return cells.map((cell) => {
+                    const dateKey = getDateKey(cell.date);
+                    const offsetDays = Math.floor((new Date(dateKey).getTime() - new Date(challenge.challengeStartDate).getTime()) / 86400000);
+                    const day = offsetDays + 1;
+                    const isChallengeDay = day >= 1 && day <= DAYS;
+
+                    let pct = 0;
+                    if (isChallengeDay) {
+                      const k = dayKey(day);
+                      const plan = challenge.plans?.[viewingRole]?.[k]?.workouts?.length
+                        ? personalizePlan(challenge.plans[viewingRole][k], challenge.users?.[viewingRole]?.preferences || "")
+                        : getEffectivePlan(viewingRole, day);
+                      const dayCheckin = normalizeCheckinEntry(challenge.checkins?.[viewingRole]?.[k]);
+                      const done = Object.values(dayCheckin.workouts || {}).filter(Boolean).length + Object.values(dayCheckin.habits || {}).filter(Boolean).length;
+                      const total = (plan.workouts?.length || 0) + (plan.habits?.length || 0);
+                      pct = total ? Math.round((done / total) * 100) : 0;
+                    }
+
+                    const stateClass = dateKey === selectedDateKey
+                      ? "is-current"
+                      : !isChallengeDay
+                        ? "is-empty"
+                        : pct >= 80
+                          ? "is-great"
+                          : pct > 0
+                            ? "is-mid"
+                            : "is-empty";
+
+                    return (
+                      <button
+                        key={dateKey}
+                        className={`calendar-day ${stateClass} ${cell.inMonth ? "" : "is-other-month"}`}
+                        disabled={!isChallengeDay}
+                        onClick={() => {
+                          if (!isChallengeDay) return;
+                          setSelectedDay(day);
+                          setTab("today");
+                        }}
+                      >
+                        <div>{cell.date.getDate()}</div>
+                        {isChallengeDay && <div style={{ fontSize: 11, opacity: 0.8 }}>D{day}</div>}
+                      </button>
+                    );
+                  });
+                })()}
+              </div>
+              <div className="calendar-tip">可查看真实日期对应的 Day1-21；仅当前身份且挑战开始后的今日可编辑。</div>
             </CardContent>
           </Card>
         )}

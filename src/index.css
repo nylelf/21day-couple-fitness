@@ -389,6 +389,29 @@ body {
   gap: 8px;
 }
 
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendar-nav-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f4ebff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.calendar-nav-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
 .section-title {
   justify-content: flex-start;
   margin-bottom: 8px;
@@ -446,6 +469,19 @@ body {
   border-radius: 13px;
   font-weight: 700;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.calendar-day:disabled {
+  cursor: default;
+}
+
+.calendar-day.is-other-month {
+  opacity: 0.45;
 }
 
 .calendar-day.is-current {
