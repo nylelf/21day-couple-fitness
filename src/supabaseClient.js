@@ -7,16 +7,9 @@ export const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, s
 
 export async function fetchChallengeByCode(inviteCode) {
   if (!supabase) return { data: null, error: new Error("Supabase 未配置") };
-  const code = inviteCode.toUpperCase();
-
-  const byInvite = await supabase.from("challenges").select("invite_code,id,data").eq("invite_code", code).maybeSingle();
-  if (!byInvite.error && byInvite.data) return { data: byInvite.data, error: null, mode: "invite_code" };
-
-  const byId = await supabase.from("challenges").select("invite_code,id,data").eq("id", code).maybeSingle();
-  if (!byId.error && byId.data) return { data: byId.data, error: null, mode: "id" };
-
-  if (byInvite.error && byId.error) return { data: null, error: byInvite.error };
-  return { data: null, error: null };
+  const code = inviteCode.trim().toUpperCase();
+  const response = await supabase.from("challenges").select("invite_code,data").eq("invite_code", code).maybeSingle();
+  return { data: response.data, error: response.error || null };
 }
 
 export async function saveChallengeToCloud(inviteCode, challenge) {
@@ -28,10 +21,5 @@ export async function saveChallengeToCloud(inviteCode, challenge) {
     { invite_code: code, data: payload, updated_at: new Date().toISOString() },
     { onConflict: "invite_code" }
   );
-  if (!writeInvite.error) return { error: null };
-
-  const writeLegacy = await supabase
-    .from("challenges")
-    .upsert({ id: code, data: payload, updated_at: new Date().toISOString() }, { onConflict: "id" });
-  return { error: writeLegacy.error || null };
+  return { error: writeInvite.error || null };
 }

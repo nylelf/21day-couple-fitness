@@ -16,9 +16,9 @@ import {
 } from "lucide-react";
 import { getBasePlan, getDefaultGoal } from "./plans";
 import { fetchChallengeByCode, saveChallengeToCloud, supabase } from "./supabaseClient";
+import { clearLocalSession, getStoredSessionValues, readLocalSession, writeLocalSession } from "./sessionStorage";
 
 const DAYS = 21;
-const LOCAL_SESSION_KEY = "couple-fitness-session-v2";
 const ROLE_MALE = "male";
 const ROLE_FEMALE = "female";
 
@@ -134,27 +134,17 @@ function createChallenge(inviteCode, myRole, nickname) {
   return { ...base, updatedAt: now };
 }
 
-function readLocalSession() {
-  try {
-    const raw = localStorage.getItem(LOCAL_SESSION_KEY);
-    return raw ? JSON.parse(raw) : { myRole: "", currentInviteCode: "" };
-  } catch {
-    return { myRole: "", currentInviteCode: "" };
-  }
-}
-
-function writeLocalSession(myRole, currentInviteCode) {
-  localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ myRole, currentInviteCode }));
-}
-
 
 export default function App() {
   const session = readLocalSession();
-  const [screen, setScreen] = useState(session.currentInviteCode ? "main" : "landing");
+  const hasRestorableSession = Boolean(session.currentInviteCode && session.myRole);
+  const [screen, setScreen] = useState(hasRestorableSession ? "main" : "landing");
   const [myRole, setMyRole] = useState(session.myRole || "");
+  const [myNickname, setMyNickname] = useState(session.myNickname || "");
   const [inviteCode, setInviteCode] = useState(session.currentInviteCode || "");
   const [challenge, setChallenge] = useState(null);
   const [activeRole, setActiveRole] = useState(session.myRole || ROLE_MALE);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
   const [selectedDay, setSelectedDay] = useState(1);
   const [tab, setTab] = useState("today");
   const [syncStatus, setSyncStatus] = useState(supabase ? "连接中..." : "本地模式：Supabase 未配置");
@@ -232,23 +222,103 @@ export default function App() {
     setErrorMsg("");
   }
 
-  async function reloadChallenge(codeOverride) {
-    const code = (codeOverride || inviteCode || "").toUpperCase();
-    if (!code || !supabase) return;
+  function applyChallengeSession(nextChallenge, role, code, nickname, statusText) {
+    const normalized = normalizeChallenge(nextChallenge);
+    const safeRole = role || ROLE_MALE;
+    const resolvedNickname = normalized.users?.[safeRole]?.name || nickname || "";
+    setMyRole(safeRole);
+    setMyNickname(resolvedNickname);
+    setInviteCode(code);
+    setActiveRole(safeRole);
+    setChallenge(normalized);
+    setSelectedDay(calcCurrentDay(normalized.challengeStartDate));
+    setScreen("main");
+    setNeedsReconnect(false);
+    setErrorMsg("");
+    setSyncStatus(statusText);
+    writeLocalSession(safeRole, code, resolvedNickname);
+  }
+
+  async function fetchAndRestoreChallenge({ code, role, nickname, useDirectSingle = false }) {
+    if (!code || !supabase) return false;
     setSyncStatus("拉取最新数据...");
+
+    if (useDirectSingle) {
+      const { data, error } = await supabase
+        .from("challenges")
+        .select("data")
+        .eq("invite_code", code)
+        .single();
+
+      if (error) {
+        console.error("Supabase reconnect failed:", error);
+        if (error.code === "PGRST116") {
+          setSyncStatus("未找到挑战数据");
+          setErrorMsg("找不到这个邀请码，请确认是否输入正确");
+        } else {
+          setSyncStatus("云端读取失败");
+          setErrorMsg("云端读取失败，请稍后重试");
+        }
+        setNeedsReconnect(true);
+        return false;
+      }
+
+      if (!data?.data) {
+        setSyncStatus("未找到挑战数据");
+        setErrorMsg("找不到这个邀请码，请确认是否输入正确");
+        setNeedsReconnect(true);
+        return false;
+      }
+
+      applyChallengeSession(data.data, role, code, nickname, "已同步最新数据");
+      return true;
+    }
+
     const result = await fetchChallengeByCode(code);
     if (result.error) {
       setSyncStatus("云端读取失败");
-      return;
+      setNeedsReconnect(true);
+      return false;
     }
     if (!result.data?.data) {
       setSyncStatus("未找到挑战数据");
+      setNeedsReconnect(true);
+      return false;
+    }
+
+    applyChallengeSession(result.data.data, role, code, nickname, "已同步最新数据");
+    return true;
+  }
+
+  async function reloadChallenge(codeOverride) {
+    const code = (codeOverride || inviteCode || "").toUpperCase();
+    await fetchAndRestoreChallenge({
+      code,
+      role: myRole || ROLE_MALE,
+      nickname: myNickname,
+      useDirectSingle: false,
+    });
+  }
+
+  async function reconnectChallenge() {
+    if (!supabase) {
+      setSyncStatus("云端读取失败");
+      setErrorMsg("Supabase 未配置");
+      setNeedsReconnect(true);
       return;
     }
-    const normalized = normalizeChallenge(result.data.data);
-    setChallenge(normalized);
-    setSelectedDay(Math.min(selectedDay, calcCurrentDay(normalized.challengeStartDate)));
-    setSyncStatus("已同步最新数据");
+    const { code: storedCode, role: storedRole, nickname: storedNickname } = getStoredSessionValues();
+    if (!storedCode || !storedRole) {
+      setErrorMsg("本地没有可恢复的挑战信息");
+      setNeedsReconnect(true);
+      return;
+    }
+    await fetchAndRestoreChallenge({
+      code: storedCode,
+      role: storedRole,
+      nickname: storedNickname,
+      useDirectSingle: true,
+    });
   }
 
   async function handleCreateChallenge() {
@@ -277,14 +347,7 @@ export default function App() {
         setErrorMsg("创建失败，请检查 Supabase challenges 表");
         return;
       }
-      writeLocalSession(createRole, code);
-      setMyRole(createRole);
-      setInviteCode(code);
-      setActiveRole(createRole);
-      setChallenge(created);
-      setSelectedDay(calcCurrentDay(created.challengeStartDate));
-      setSyncStatus("挑战创建成功");
-      setScreen("main");
+      applyChallengeSession(created, createRole, code, name, "挑战创建成功");
       return;
     }
     setErrorMsg("邀请码生成冲突过多，请重试");
@@ -317,7 +380,13 @@ export default function App() {
       return;
     }
     const remote = normalizeChallenge(result.data.data);
-    if (remote.users[joinRole]?.name) {
+    const occupiedName = (remote.users[joinRole]?.name || "").trim();
+    if (occupiedName) {
+      // Allow returning user to reclaim the same role by matching nickname.
+      if (occupiedName === nickname) {
+        applyChallengeSession(remote, joinRole, code, nickname, "已恢复你的挑战身份");
+        return;
+      }
       setErrorMsg("这个角色已经被占用，请选择另一个角色。");
       return;
     }
@@ -341,22 +410,17 @@ export default function App() {
       return;
     }
 
-    writeLocalSession(joinRole, code);
-    setMyRole(joinRole);
-    setInviteCode(code);
-    setActiveRole(joinRole);
-    setChallenge(updated);
-    setSelectedDay(calcCurrentDay(updated.challengeStartDate));
-    setSyncStatus("加入成功，已连接共享挑战");
-    setScreen("main");
+    applyChallengeSession(updated, joinRole, code, nickname, "加入成功，已连接共享挑战");
   }
 
   function leaveChallenge() {
-    localStorage.removeItem(LOCAL_SESSION_KEY);
+    clearLocalSession();
     setScreen("landing");
     setMyRole("");
+    setMyNickname("");
     setInviteCode("");
     setChallenge(null);
+    setNeedsReconnect(false);
     setActiveRole(ROLE_MALE);
     setSelectedDay(1);
     setTab("today");
@@ -441,8 +505,8 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!screen || screen !== "main" || !inviteCode || !supabase) return;
-    reloadChallenge(inviteCode);
+    if (!screen || screen !== "main" || !supabase) return;
+    reconnectChallenge();
   }, [screen]);
 
   useEffect(() => {
@@ -462,12 +526,6 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "challenges", filter: `invite_code=eq.${inviteCode}` }, handlers)
       .subscribe();
     channels.push(inviteChannel);
-
-    const legacyChannel = supabase
-      .channel(`challenge-by-id-${inviteCode}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "challenges", filter: `id=eq.${inviteCode}` }, handlers)
-      .subscribe();
-    channels.push(legacyChannel);
 
     return () => {
       channels.forEach((channel) => supabase.removeChannel(channel));
@@ -569,8 +627,22 @@ export default function App() {
           <Card className="card glass-card">
             <CardContent className="card-content section-stack">
               <div className="sync-line"><Cloud size={16} /> {syncStatus}</div>
-              <Button className="ghost-btn full-btn" onClick={() => reloadChallenge()}>手动同步</Button>
-              <Button className="danger-btn full-btn" onClick={leaveChallenge}>离开挑战</Button>
+              {needsReconnect ? (
+                <>
+                  <div className="info-box">
+                    无法恢复挑战连接。当前邀请码：<b>{inviteCode || "未找到"}</b><br />
+                    身份：<b>{myRole ? roleLabel(myRole) : "未记录"}</b>
+                    {myNickname ? <> ｜ 昵称：<b>{myNickname}</b></> : null}
+                  </div>
+                  <Button className="ghost-btn full-btn" onClick={reconnectChallenge}>重新连接挑战</Button>
+                  <Button className="danger-btn full-btn" onClick={leaveChallenge}>退出当前挑战</Button>
+                </>
+              ) : (
+                <>
+                  <Button className="ghost-btn full-btn" onClick={reconnectChallenge}>重新连接挑战</Button>
+                  <Button className="danger-btn full-btn" onClick={leaveChallenge}>退出当前挑战</Button>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -578,7 +650,7 @@ export default function App() {
     );
   }
 
-  const meName = challenge.users[myRole]?.name || roleLabel(myRole);
+  const meName = challenge.users[myRole]?.name || myNickname || roleLabel(myRole);
   const partner = oppositeRole(myRole);
   const partnerName = challenge.users[partner]?.name || roleLabel(partner);
   const aiCoachText = myRole === ROLE_MALE
@@ -785,6 +857,12 @@ export default function App() {
             </CardContent>
           </Card>
         )}
+
+        <Card className="card glass-card">
+          <CardContent className="card-content">
+            <Button className="danger-btn full-btn" onClick={leaveChallenge}>退出当前挑战</Button>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
