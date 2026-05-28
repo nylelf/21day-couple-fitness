@@ -456,6 +456,20 @@ body {
   text-transform: uppercase;
 }
 
+.pref-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.pref-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: #ddd0f2;
+}
+
 .calendar-grid {
   margin-top: 12px;
   display: grid;
