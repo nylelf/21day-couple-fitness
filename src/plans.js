@@ -167,10 +167,28 @@ const femaleTemplates = {
 const maleWeekdayCycle = ["chestTriA", "backBiA", "shoulderLegA", "recoveryCore", "basketball", "upperHypertrophy", "basketball"];
 const femaleWeekdayCycle = ["lowerA", "upperA", "cardioRecovery", "balletRecovery", "lowerB", "upperB", "activeRecovery"];
 
+function formatLocalDate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function parseDateOnly(dateValue) {
+  if (dateValue instanceof Date) {
+    return new Date(dateValue.getFullYear(), dateValue.getMonth(), dateValue.getDate());
+  }
+  if (typeof dateValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+    const [y, m, d] = dateValue.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  const parsed = new Date(dateValue);
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
 function toDateOnly(dateValue) {
-  const date = new Date(dateValue || new Date().toISOString().slice(0, 10));
-  date.setHours(0, 0, 0, 0);
-  return date;
+  const fallback = formatLocalDate(new Date());
+  return parseDateOnly(dateValue || fallback);
 }
 
 function getDateForDay(startDate, day) {

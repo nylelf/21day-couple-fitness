@@ -52,7 +52,7 @@ function dayKey(day) {
 }
 
 function calcCurrentDay(challengeStartDate) {
-  const start = new Date(challengeStartDate);
+  const start = parseDateOnly(challengeStartDate);
   const today = new Date();
   start.setHours(0, 0, 0, 0);
   today.setHours(0, 0, 0, 0);
@@ -60,21 +60,44 @@ function calcCurrentDay(challengeStartDate) {
   return Math.min(21, Math.max(1, diff + 1));
 }
 
+function parseDateOnly(dateValue) {
+  if (dateValue instanceof Date) {
+    return new Date(dateValue.getFullYear(), dateValue.getMonth(), dateValue.getDate());
+  }
+  if (typeof dateValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+    const [y, m, d] = dateValue.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  const parsed = new Date(dateValue);
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
+function formatDateOnly(dateValue) {
+  const d = parseDateOnly(dateValue);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function getDateKey(date) {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString().slice(0, 10);
+  return formatDateOnly(date);
 }
 
 function addDays(dateValue, days) {
-  const d = new Date(dateValue);
-  d.setHours(0, 0, 0, 0);
+  const d = parseDateOnly(dateValue);
   d.setDate(d.getDate() + days);
   return d;
 }
 
 function getChallengeDateForDay(challengeStartDate, day) {
   return addDays(challengeStartDate, day - 1);
+}
+
+function dateDiffDays(fromDate, toDate) {
+  const start = parseDateOnly(fromDate).getTime();
+  const end = parseDateOnly(toDate).getTime();
+  return Math.floor((end - start) / 86400000);
 }
 
 function formatMonthTitle(date) {
@@ -190,7 +213,7 @@ function generateInviteCode() {
 function normalizeChallenge(data) {
   if (!data) return null;
   const inviteCode = data.inviteCode || data.challengeId || "";
-  const challengeStartDate = data.challengeStartDate || new Date().toISOString().slice(0, 10);
+  const challengeStartDate = data.challengeStartDate || formatDateOnly(new Date());
   return {
     inviteCode,
     challengeStartDate,
@@ -279,7 +302,7 @@ export default function App() {
   const [createNickname, setCreateNickname] = useState("");
   const [createPreferences, setCreatePreferences] = useState("");
   const [createPreferenceProfile, setCreatePreferenceProfile] = useState({ ...DEFAULT_PREFERENCE_PROFILE });
-  const [createStartDate, setCreateStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [createStartDate, setCreateStartDate] = useState(formatDateOnly(new Date()));
   const [joinCode, setJoinCode] = useState("");
   const [joinRole, setJoinRole] = useState(ROLE_FEMALE);
   const [joinNickname, setJoinNickname] = useState("");
@@ -728,7 +751,7 @@ export default function App() {
 
   useEffect(() => {
     if (!challenge?.challengeStartDate) return;
-    const start = new Date(challenge.challengeStartDate);
+    const start = parseDateOnly(challenge.challengeStartDate);
     start.setDate(1);
     setCalendarMonthDate(start);
   }, [challenge?.challengeStartDate]);
@@ -769,7 +792,7 @@ export default function App() {
                 </div>
                 <div className="icon-pill"><Heart size={22} /></div>
               </div>
-              <Button className="primary-btn full-btn" onClick={() => { setScreen("create"); setCreateRole(ROLE_MALE); setCreateStartDate(new Date().toISOString().slice(0, 10)); setCreatePreferences(""); setCreatePreferenceProfile({ ...DEFAULT_PREFERENCE_PROFILE }); }}>
+              <Button className="primary-btn full-btn" onClick={() => { setScreen("create"); setCreateRole(ROLE_MALE); setCreateStartDate(formatDateOnly(new Date())); setCreatePreferences(""); setCreatePreferenceProfile({ ...DEFAULT_PREFERENCE_PROFILE }); }}>
                 <Users size={16} />Create Couple Challenge
               </Button>
               <Button className="ghost-btn full-btn" onClick={() => { setScreen("join"); setJoinRole(ROLE_FEMALE); setJoinPreferences(""); setJoinPreferenceProfile({ ...DEFAULT_PREFERENCE_PROFILE }); }}>
@@ -803,7 +826,7 @@ export default function App() {
               <input
                 className="text-input"
                 type="date"
-                min={new Date().toISOString().slice(0, 10)}
+                min={formatDateOnly(new Date())}
                 value={createStartDate}
                 onChange={(event) => setCreateStartDate(event.target.value)}
               />
@@ -1145,7 +1168,7 @@ export default function App() {
 
                   return cells.map((cell) => {
                     const dateKey = getDateKey(cell.date);
-                    const offsetDays = Math.floor((new Date(dateKey).getTime() - new Date(challenge.challengeStartDate).getTime()) / 86400000);
+                    const offsetDays = dateDiffDays(challenge.challengeStartDate, cell.date);
                     const day = offsetDays + 1;
                     const isChallengeDay = day >= 1 && day <= DAYS;
 
