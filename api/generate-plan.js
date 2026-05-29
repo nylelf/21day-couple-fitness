@@ -23,7 +23,8 @@ const EQUIPMENT_LABELS = {
 };
 
 const SYSTEM_PROMPT = `你是一位专业健身教练，擅长为情侣制定科学的个性化训练计划与饮食/恢复方案。
-请严格只返回 JSON，不要任何解释、标题或 markdown 格式。`;
+请严格只返回 JSON，不要任何解释、标题或 markdown 格式。
+所有输出必须使用中文，包括动作名称格式统一为"中文名（English）"，note 字段也必须是中文，不能出现纯英文句子。`;
 
 function parseDateOnly(dateValue) {
   if (typeof dateValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
@@ -134,8 +135,8 @@ function buildUserPrompt({ role, preferenceProfile, challengeStartDate }) {
 2. 第 8-14 天：强度提升期（逐步加重/加量）
 3. 第 15-21 天：巩固强化期（挑战更高强度，仍注意安全）
 4. 每天包含 title、workouts、habits 三个字段
-5. workouts 每项包含 name、sets、reps、rest、note（note 用中文，可含简短英文要点）
-6. 动作名称格式："中文名（English）"
+5. workouts 每项包含 name、sets、reps、rest、note（note 必须中文）
+6. 动作名称格式："中文名（English）"（English 仅作括号内对照，其余字段不得使用纯英文句子）
 7. 总训练内容需匹配每次训练时间；器材选择需匹配可用器材
 8. 若有每周其他运动，避免同天安排冲突的大强度训练
 9. 若有身体状况备注，相关动作 note 中给出保护提示

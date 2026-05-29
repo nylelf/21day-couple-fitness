@@ -41,6 +41,16 @@ function createPendingPlan() {
   return { ...PLAN_PENDING_PLACEHOLDER };
 }
 
+function isStoredAiDayPlan(plan) {
+  return Boolean(
+    plan &&
+    typeof plan === "object" &&
+    !plan.pending &&
+    Array.isArray(plan.workouts) &&
+    plan.workouts.length > 0
+  );
+}
+
 function Card({ className = "", children }) {
   return <div className={className}>{children}</div>;
 }
@@ -314,7 +324,11 @@ async function requestGeneratedPlan(role, preferenceProfile, challengeStartDate)
   const response = await fetch("/api/generate-plan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ role, preferenceProfile, challengeStartDate }),
+    body: JSON.stringify({
+      role,
+      preferenceProfile: normalizePreferenceProfile(preferenceProfile, "", role),
+      challengeStartDate,
+    }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -322,6 +336,9 @@ async function requestGeneratedPlan(role, preferenceProfile, challengeStartDate)
   }
   if (!data.plans || typeof data.plans !== "object") {
     throw new Error("计划生成失败");
+  }
+  if (!isStoredAiDayPlan(data.plans["day-1"])) {
+    throw new Error("AI 返回的计划不完整");
   }
   return data.plans;
 }
@@ -362,6 +379,10 @@ export default function App() {
   const [joinRole, setJoinRole] = useState(ROLE_FEMALE);
   const [joinNickname, setJoinNickname] = useState("");
   const [joinPreferenceProfile, setJoinPreferenceProfile] = useState(createDefaultPreferenceProfile());
+  const [joinStep, setJoinStep] = useState("identify");
+  const [joinRemoteChallenge, setJoinRemoteChallenge] = useState(null);
+  const [joinLookupLoading, setJoinLookupLoading] = useState(false);
+  const [joinIsReturningUpdate, setJoinIsReturningUpdate] = useState(false);
   const [stayOnLanding, setStayOnLanding] = useState(false);
   const restoreRequestVersionRef = useRef(0);
   const [calendarMonthDate, setCalendarMonthDate] = useState(new Date());
@@ -380,14 +401,18 @@ export default function App() {
   const dKey = dayKey(selectedDay);
   const getEffectivePlan = (role, day) => {
     const key = dayKey(day);
-    const aiPlan = challenge?.plans?.[role]?.[key];
-    if (aiPlan?.workouts?.length) {
-      return aiPlan;
+    const storedPlan = challenge?.plans?.[role]?.[key];
+    if (isStoredAiDayPlan(storedPlan)) {
+      return {
+        title: storedPlan.title || `Day ${day}`,
+        workouts: storedPlan.workouts,
+        habits: Array.isArray(storedPlan.habits) ? storedPlan.habits : [],
+      };
     }
     return createPendingPlan();
   };
   const selectedPlan = useMemo(() => {
-    if (!challenge) return personalizePlan(getBasePlan(viewingRole, selectedDay), "");
+    if (!challenge) return createPendingPlan();
     return getEffectivePlan(viewingRole, selectedDay);
   }, [challenge, viewingRole, selectedDay, dKey]);
 
@@ -484,6 +509,25 @@ export default function App() {
 
   function resetJoinCreateErrors() {
     setErrorMsg("");
+  }
+
+  function resetJoinFlow() {
+    setJoinStep("identify");
+    setJoinRemoteChallenge(null);
+    setJoinLookupLoading(false);
+    setJoinIsReturningUpdate(false);
+    setJoinPreferenceProfile(createDefaultPreferenceProfile());
+    setToastMsg("");
+  }
+
+  function openJoinScreen() {
+    resetJoinCreateErrors();
+    resetJoinFlow();
+    const stored = getStoredSessionValues();
+    setJoinCode(stored.code || "");
+    setJoinRole(stored.role || ROLE_FEMALE);
+    setJoinNickname(stored.nickname || "");
+    setScreen("join");
   }
 
   function showToast(message) {
@@ -660,12 +704,10 @@ export default function App() {
     setErrorMsg("邀请码生成冲突过多，请重试");
   }
 
-  async function handleJoinChallenge() {
+  async function handleJoinLookup() {
     resetJoinCreateErrors();
     const code = joinCode.trim().toUpperCase();
     const nickname = joinNickname.trim();
-    const preferenceProfile = normalizePreferenceProfile(joinPreferenceProfile, "", joinRole);
-    const preferenceSummary = profileSummary(preferenceProfile, joinRole);
     if (!code || code.length !== 6) {
       setErrorMsg("邀请码应为 6 位");
       return;
@@ -679,68 +721,103 @@ export default function App() {
       return;
     }
 
-    const result = await fetchChallengeByCode(code);
-    if (result.error) {
-      setErrorMsg("读取挑战失败");
+    setJoinLookupLoading(true);
+    try {
+      const result = await fetchChallengeByCode(code);
+      if (result.error) {
+        setErrorMsg("读取挑战失败");
+        return;
+      }
+      if (!result.data?.data) {
+        setErrorMsg("邀请码不存在");
+        return;
+      }
+
+      const remote = normalizeChallenge(result.data.data);
+      const occupiedName = (remote.users[joinRole]?.name || "").trim();
+      if (occupiedName && occupiedName !== nickname) {
+        setErrorMsg("这个角色已经被占用，请选择另一个角色。");
+        return;
+      }
+
+      setJoinRemoteChallenge(remote);
+      if (occupiedName && occupiedName === nickname) {
+        setJoinStep("welcome");
+        return;
+      }
+
+      setJoinIsReturningUpdate(false);
+      setJoinPreferenceProfile(createDefaultPreferenceProfile());
+      setJoinStep("preferences");
+    } finally {
+      setJoinLookupLoading(false);
+    }
+  }
+
+  function handleJoinDirectEnter() {
+    if (!joinRemoteChallenge) return;
+    const code = joinCode.trim().toUpperCase();
+    const nickname = joinNickname.trim();
+    // 老用户直接进入：不调用 generate-plan，使用 Supabase 已有 plans.{joinRole}
+    applyChallengeSession(joinRemoteChallenge, joinRole, code, nickname, "欢迎回来！", { force: true });
+    resetJoinFlow();
+  }
+
+  function handleJoinStartUpdatePreferences() {
+    if (!joinRemoteChallenge) return;
+    const existing = joinRemoteChallenge.users?.[joinRole]?.preferenceProfile;
+    setJoinPreferenceProfile(
+      existing
+        ? { ...normalizePreferenceProfile(existing, "", joinRole) }
+        : createDefaultPreferenceProfile()
+    );
+    setJoinIsReturningUpdate(true);
+    setJoinStep("preferences");
+  }
+
+  async function generateJoinRolePlans(challengeStartDate) {
+    const preferenceProfile = normalizePreferenceProfile(joinPreferenceProfile, "", joinRole);
+    return requestGeneratedPlan(joinRole, preferenceProfile, challengeStartDate);
+  }
+
+  async function handleJoinCompleteWithPreferences() {
+    resetJoinCreateErrors();
+    const code = joinCode.trim().toUpperCase();
+    const nickname = joinNickname.trim();
+    if (!joinRemoteChallenge) {
+      setErrorMsg("请先完成上一步验证");
+      setJoinStep("identify");
       return;
     }
-    if (!result.data?.data) {
-      setErrorMsg("邀请码不存在");
-      return;
-    }
-    const remote = normalizeChallenge(result.data.data);
-    const occupiedName = (remote.users[joinRole]?.name || "").trim();
-
-    if (occupiedName && occupiedName !== nickname) {
-      setErrorMsg("这个角色已经被占用，请选择另一个角色。");
+    if (!code || !nickname) {
+      setErrorMsg("邀请码或昵称无效，请返回上一步");
+      setJoinStep("identify");
       return;
     }
 
-    const isReclaim = Boolean(occupiedName && occupiedName === nickname);
-    const shouldRefreshPlan = !isReclaim || Boolean(preferenceSummary || profileSummary(preferenceProfile, joinRole));
+    const latestResult = await fetchChallengeByCode(code);
+    if (latestResult.error || !latestResult.data?.data) {
+      setErrorMsg("读取挑战失败，请稍后重试");
+      return;
+    }
+    const remote = normalizeChallenge(latestResult.data.data);
 
-    let rolePlans = remote.plans?.[joinRole] || {};
+    const preferenceProfile = normalizePreferenceProfile(joinPreferenceProfile, "", joinRole);
+    const preferenceSummary = profileSummary(preferenceProfile, joinRole);
+
+    // 新用户加入 / 老用户更新偏好：调用 /api/generate-plan
+    setPlanGenerating(true);
+    setToastMsg("");
+    let rolePlans;
     let usedFallback = false;
-
-    if (shouldRefreshPlan) {
-      setPlanGenerating(true);
-      setToastMsg("");
-      try {
-        rolePlans = await requestGeneratedPlan(joinRole, preferenceProfile, remote.challengeStartDate);
-      } catch {
-        rolePlans = buildFallbackPlans(joinRole, remote.challengeStartDate);
-        usedFallback = true;
-      } finally {
-        setPlanGenerating(false);
-      }
-    }
-
-    if (isReclaim) {
-      if (shouldRefreshPlan) {
-        const reclaimed = {
-          ...remote,
-          users: {
-            ...remote.users,
-            [joinRole]: {
-              ...remote.users[joinRole],
-              preferenceProfile,
-              preferences: preferenceSummary,
-            },
-          },
-          plans: {
-            ...remote.plans,
-            [joinRole]: rolePlans,
-          },
-        };
-        const saved = await saveChallengeToCloud(code, reclaimed);
-        if (!saved.error) {
-          if (usedFallback) showToast("计划生成失败，已使用默认计划");
-          applyChallengeSession(reclaimed, joinRole, code, nickname, "已恢复你的挑战身份", { force: true });
-          return;
-        }
-      }
-      applyChallengeSession(remote, joinRole, code, nickname, "已恢复你的挑战身份", { force: true });
-      return;
+    try {
+      rolePlans = await generateJoinRolePlans(remote.challengeStartDate);
+    } catch (err) {
+      console.error("generate-plan failed on join:", err);
+      rolePlans = buildFallbackPlans(joinRole, remote.challengeStartDate);
+      usedFallback = true;
+    } finally {
+      setPlanGenerating(false);
     }
 
     const updated = {
@@ -753,7 +830,7 @@ export default function App() {
           goal: remote.users[joinRole]?.goal || getDefaultGoal(joinRole),
           preferenceProfile,
           preferences: preferenceSummary,
-          joinedAt: new Date().toISOString(),
+          joinedAt: remote.users[joinRole]?.joinedAt || new Date().toISOString(),
         },
       },
       plans: {
@@ -771,7 +848,15 @@ export default function App() {
     if (usedFallback) {
       showToast("计划生成失败，已使用默认计划");
     }
-    applyChallengeSession(updated, joinRole, code, nickname, "加入成功，已连接共享挑战", { force: true });
+    applyChallengeSession(
+      updated,
+      joinRole,
+      code,
+      nickname,
+      joinIsReturningUpdate ? "偏好与计划已更新" : "加入成功，已连接共享挑战",
+      { force: true }
+    );
+    resetJoinFlow();
   }
 
   function leaveChallenge() {
@@ -878,9 +963,11 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!screen || screen !== "main" || !supabase || stayOnLanding) return;
-    reconnectChallenge();
-  }, [screen, stayOnLanding]);
+    if (!hasRestorableSession || !supabase || stayOnLanding) return;
+    if (screen === "main" && !challenge) {
+      reconnectChallenge();
+    }
+  }, [screen, stayOnLanding, hasRestorableSession, challenge]);
 
   useEffect(() => {
     if (!challenge?.challengeStartDate) return;
@@ -933,7 +1020,12 @@ export default function App() {
               <Button className="primary-btn full-btn" onClick={() => { setScreen("create"); setCreateRole(ROLE_MALE); setCreateStartDate(formatDateOnly(new Date())); setCreatePreferenceProfile(createDefaultPreferenceProfile()); }}>
                 <Users size={16} />Create Couple Challenge
               </Button>
-              <Button className="ghost-btn full-btn" onClick={() => { setScreen("join"); setJoinRole(ROLE_FEMALE); setJoinPreferenceProfile(createDefaultPreferenceProfile()); }}>
+              {Boolean(myRole && inviteCode) ? (
+                <Button className="primary-btn full-btn" onClick={() => { setStayOnLanding(false); setScreen("main"); }}>
+                  继续我的挑战
+                </Button>
+              ) : null}
+              <Button className="ghost-btn full-btn" onClick={openJoinScreen}>
                 <UserPlus size={16} />Join Challenge
               </Button>
               <div className="footer-note">创建者只需填写自己的身份和昵称，另一半用邀请码加入并填写自己的信息。</div>
@@ -992,6 +1084,97 @@ export default function App() {
   }
 
   if (screen === "join") {
+    if (joinStep === "welcome") {
+      return (
+        <div className="app-shell">
+          <div className="mobile-container">
+            <Card className="card glass-card">
+              <CardContent className="card-content section-stack">
+                <h2 className="section-heading">👋 欢迎回来，{joinNickname.trim()}！</h2>
+                <div className="info-box">
+                  你的专属计划已生成，是否需要更新偏好设置？
+                </div>
+                <div className="info-box">
+                  邀请码：<b>{joinCode}</b><br />
+                  身份：{roleLabel(joinRole)}
+                </div>
+                {errorMsg && <div className="error-line">{errorMsg}</div>}
+                <Button className="primary-btn full-btn" onClick={handleJoinDirectEnter}>
+                  直接进入挑战
+                </Button>
+                <Button className="ghost-btn full-btn" onClick={handleJoinStartUpdatePreferences}>
+                  更新偏好设置
+                </Button>
+                <Button
+                  className="ghost-btn full-btn"
+                  onClick={() => {
+                    setJoinStep("identify");
+                    setJoinRemoteChallenge(null);
+                    setErrorMsg("");
+                  }}
+                >
+                  返回修改信息
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      );
+    }
+
+    if (joinStep === "preferences") {
+      return (
+        <div className="app-shell">
+          <div className="mobile-container">
+            <Card className="card glass-card">
+              <CardContent className="card-content section-stack">
+                <h2 className="section-heading">
+                  {joinIsReturningUpdate ? "更新偏好设置" : "填写偏好设置"}
+                </h2>
+                <div className="info-box">
+                  {joinNickname.trim()} ｜ {roleLabel(joinRole)} ｜ 邀请码 {joinCode}
+                </div>
+                <PreferenceForm
+                  role={joinRole}
+                  value={joinPreferenceProfile}
+                  onChange={setJoinPreferenceProfile}
+                />
+                {toastMsg && <div className="info-box toast-line">{toastMsg}</div>}
+                {errorMsg && <div className="error-line">{errorMsg}</div>}
+                <Button
+                  className="primary-btn full-btn"
+                  onClick={handleJoinCompleteWithPreferences}
+                  disabled={planGenerating}
+                >
+                  {planGenerating
+                    ? "🤖 AI 正在为你生成专属计划，请稍候（约10-20秒）…"
+                    : joinIsReturningUpdate
+                      ? "保存并重新生成计划"
+                      : "加入挑战"}
+                </Button>
+                <Button
+                  className="ghost-btn full-btn"
+                  onClick={() => {
+                    if (joinIsReturningUpdate) {
+                      setJoinStep("welcome");
+                      setErrorMsg("");
+                      return;
+                    }
+                    setJoinStep("identify");
+                    setJoinRemoteChallenge(null);
+                    setErrorMsg("");
+                  }}
+                  disabled={planGenerating}
+                >
+                  返回
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="app-shell">
         <div className="mobile-container">
@@ -1015,21 +1198,22 @@ export default function App() {
                 onChange={(event) => setJoinNickname(event.target.value)}
                 placeholder="输入你的昵称"
               />
-              <PreferenceForm
-                role={joinRole}
-                value={joinPreferenceProfile}
-                onChange={setJoinPreferenceProfile}
-              />
-              {toastMsg && <div className="info-box toast-line">{toastMsg}</div>}
+              <div className="footer-note">老用户输入相同昵称可直接恢复，无需重新填写偏好。</div>
               {errorMsg && <div className="error-line">{errorMsg}</div>}
               <Button
                 className="primary-btn full-btn"
-                onClick={handleJoinChallenge}
-                disabled={planGenerating}
+                onClick={handleJoinLookup}
+                disabled={joinLookupLoading}
               >
-                {planGenerating ? "🤖 AI 正在为你生成专属计划，请稍候（约10-20秒）…" : "加入挑战"}
+                {joinLookupLoading ? "正在验证…" : "继续"}
               </Button>
-              <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); setToastMsg(""); }} disabled={planGenerating}>返回</Button>
+              <Button
+                className="ghost-btn full-btn"
+                onClick={() => { setScreen("landing"); resetJoinFlow(); setErrorMsg(""); }}
+                disabled={joinLookupLoading}
+              >
+                返回
+              </Button>
             </CardContent>
           </Card>
         </div>
