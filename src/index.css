@@ -485,6 +485,11 @@ body {
   gap: 16px;
 }
 
+.toast-line {
+  border-color: rgba(255, 182, 77, 0.45);
+  background: rgba(255, 182, 77, 0.12);
+}
+
 .pref-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

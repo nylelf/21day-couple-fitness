@@ -291,6 +291,42 @@ function createChallenge(inviteCode, myRole, nickname, challengeStartDate, prefe
   return { ...base, updatedAt: now };
 }
 
+function buildFallbackPlans(role, challengeStartDate) {
+  const plans = {};
+  for (let day = 1; day <= DAYS; day += 1) {
+    plans[dayKey(day)] = getBasePlan(role, day, challengeStartDate);
+  }
+  return plans;
+}
+
+async function requestGeneratedPlan(role, preferenceProfile, challengeStartDate) {
+  const response = await fetch("/api/generate-plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role, preferenceProfile, challengeStartDate }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "计划生成失败");
+  }
+  if (!data.plans || typeof data.plans !== "object") {
+    throw new Error("计划生成失败");
+  }
+  return data.plans;
+}
+
+async function resolveRolePlans(role, preferenceProfile, challengeStartDate) {
+  try {
+    const plans = await requestGeneratedPlan(role, preferenceProfile, challengeStartDate);
+    return { plans, usedFallback: false };
+  } catch {
+    return {
+      plans: buildFallbackPlans(role, challengeStartDate),
+      usedFallback: true,
+    };
+  }
+}
+
 
 export default function App() {
   const session = readLocalSession();
@@ -322,6 +358,9 @@ export default function App() {
   const [aiCoachLoading, setAiCoachLoading] = useState(false);
   const [aiCoachError, setAiCoachError] = useState("");
   const [messageDraft, setMessageDraft] = useState("");
+  const [planGenerating, setPlanGenerating] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+  const toastTimerRef = useRef(null);
 
   const currentDay = challenge ? calcCurrentDay(challenge.challengeStartDate) : 1;
   const hasStarted = challenge ? getDateKey(new Date()) >= getDateKey(challenge.challengeStartDate) : true;
@@ -330,8 +369,11 @@ export default function App() {
   const dKey = dayKey(selectedDay);
   const getEffectivePlan = (role, day) => {
     const key = dayKey(day);
-    const custom = challenge?.plans?.[role]?.[key];
-    const base = custom?.workouts?.length ? custom : getBasePlan(role, day, challenge?.challengeStartDate);
+    const aiPlan = challenge?.plans?.[role]?.[key];
+    if (aiPlan?.workouts?.length) {
+      return aiPlan;
+    }
+    const base = getBasePlan(role, day, challenge?.challengeStartDate);
     const pref = challenge?.users?.[role]?.preferences || "";
     const prefProfile = challenge?.users?.[role]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE;
     return personalizePlan(base, pref, prefProfile, role);
@@ -434,6 +476,14 @@ export default function App() {
 
   function resetJoinCreateErrors() {
     setErrorMsg("");
+  }
+
+  function showToast(message) {
+    setToastMsg(message);
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => setToastMsg(""), 5000);
   }
 
   function applyChallengeSession(nextChallenge, role, code, nickname, statusText, options = {}) {
@@ -563,6 +613,18 @@ export default function App() {
       return;
     }
 
+    setPlanGenerating(true);
+    setToastMsg("");
+    let rolePlans;
+    let usedFallback = false;
+    try {
+      const result = await resolveRolePlans(createRole, preferenceProfile, startDate);
+      rolePlans = result.plans;
+      usedFallback = result.usedFallback;
+    } finally {
+      setPlanGenerating(false);
+    }
+
     let attempts = 0;
     while (attempts < 4) {
       const code = generateInviteCode();
@@ -572,10 +634,17 @@ export default function App() {
         continue;
       }
       const created = createChallenge(code, createRole, name, startDate, preferenceSummary, preferenceProfile);
+      created.plans = {
+        ...created.plans,
+        [createRole]: rolePlans,
+      };
       const saved = await saveChallengeToCloud(code, created);
       if (saved.error) {
         setErrorMsg("创建失败，请检查 Supabase challenges 表");
         return;
+      }
+      if (usedFallback) {
+        showToast("计划生成失败，已使用默认计划");
       }
       applyChallengeSession(created, createRole, code, name, "挑战创建成功", { force: true });
       return;
@@ -613,6 +682,19 @@ export default function App() {
     }
     const remote = normalizeChallenge(result.data.data);
     const occupiedName = (remote.users[joinRole]?.name || "").trim();
+
+    setPlanGenerating(true);
+    setToastMsg("");
+    let rolePlans;
+    let usedFallback = false;
+    try {
+      const generated = await resolveRolePlans(joinRole, preferenceProfile, remote.challengeStartDate);
+      rolePlans = generated.plans;
+      usedFallback = generated.usedFallback;
+    } finally {
+      setPlanGenerating(false);
+    }
+
     if (occupiedName) {
       // Allow returning user to reclaim the same role by matching nickname.
       if (occupiedName === nickname) {
@@ -627,9 +709,14 @@ export default function App() {
                 preferences: preferenceSummary,
               },
             },
+            plans: {
+              ...remote.plans,
+              [joinRole]: rolePlans,
+            },
           };
           const saved = await saveChallengeToCloud(code, reclaimed);
           if (!saved.error) {
+            if (usedFallback) showToast("计划生成失败，已使用默认计划");
             applyChallengeSession(reclaimed, joinRole, code, nickname, "已恢复你的挑战身份", { force: true });
             return;
           }
@@ -654,6 +741,10 @@ export default function App() {
           joinedAt: new Date().toISOString(),
         },
       },
+      plans: {
+        ...remote.plans,
+        [joinRole]: rolePlans,
+      },
     };
 
     const saved = await saveChallengeToCloud(code, updated);
@@ -662,6 +753,9 @@ export default function App() {
       return;
     }
 
+    if (usedFallback) {
+      showToast("计划生成失败，已使用默认计划");
+    }
     applyChallengeSession(updated, joinRole, code, nickname, "加入成功，已连接共享挑战", { force: true });
   }
 
@@ -865,9 +959,16 @@ export default function App() {
                 onChange={setCreatePreferenceProfile}
               />
               <div className="footer-note">开始日期可选今天或未来日期。偏好设置会用于微调训练计划。</div>
+              {toastMsg && <div className="info-box toast-line">{toastMsg}</div>}
               {errorMsg && <div className="error-line">{errorMsg}</div>}
-              <Button className="primary-btn full-btn" onClick={handleCreateChallenge}>生成邀请码并创建</Button>
-              <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); }}>返回</Button>
+              <Button
+                className="primary-btn full-btn"
+                onClick={handleCreateChallenge}
+                disabled={planGenerating}
+              >
+                {planGenerating ? "🤖 AI 正在为你生成专属计划，请稍候（约10-20秒）…" : "生成邀请码并创建"}
+              </Button>
+              <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); setToastMsg(""); }} disabled={planGenerating}>返回</Button>
             </CardContent>
           </Card>
         </div>
@@ -904,9 +1005,16 @@ export default function App() {
                 value={joinPreferenceProfile}
                 onChange={setJoinPreferenceProfile}
               />
+              {toastMsg && <div className="info-box toast-line">{toastMsg}</div>}
               {errorMsg && <div className="error-line">{errorMsg}</div>}
-              <Button className="primary-btn full-btn" onClick={handleJoinChallenge}>加入挑战</Button>
-              <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); }}>返回</Button>
+              <Button
+                className="primary-btn full-btn"
+                onClick={handleJoinChallenge}
+                disabled={planGenerating}
+              >
+                {planGenerating ? "🤖 AI 正在为你生成专属计划，请稍候（约10-20秒）…" : "加入挑战"}
+              </Button>
+              <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); setToastMsg(""); }} disabled={planGenerating}>返回</Button>
             </CardContent>
           </Card>
         </div>
@@ -1178,14 +1286,7 @@ export default function App() {
                     let pct = 0;
                     if (isChallengeDay) {
                       const k = dayKey(day);
-                      const plan = challenge.plans?.[viewingRole]?.[k]?.workouts?.length
-                        ? personalizePlan(
-                          challenge.plans[viewingRole][k],
-                          challenge.users?.[viewingRole]?.preferences || "",
-                          challenge.users?.[viewingRole]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE,
-                          viewingRole
-                        )
-                        : getEffectivePlan(viewingRole, day);
+                      const plan = getEffectivePlan(viewingRole, day);
                       const dayCheckin = normalizeCheckinEntry(challenge.checkins?.[viewingRole]?.[k]);
                       const done = Object.values(dayCheckin.workouts || {}).filter(Boolean).length + Object.values(dayCheckin.habits || {}).filter(Boolean).length;
                       const total = (plan.workouts?.length || 0) + (plan.habits?.length || 0);
