@@ -245,6 +245,10 @@ function normalizeChallenge(data) {
       male: data.notes?.male || {},
       female: data.notes?.female || {},
     },
+    messages: {
+      male: data.messages?.male || {},
+      female: data.messages?.female || {},
+    },
     updatedAt: data.updatedAt || new Date().toISOString(),
   };
 }
@@ -314,6 +318,7 @@ export default function App() {
   const [aiCoachText, setAiCoachText] = useState("");
   const [aiCoachLoading, setAiCoachLoading] = useState(false);
   const [aiCoachError, setAiCoachError] = useState("");
+  const [messageDraft, setMessageDraft] = useState("");
 
   const currentDay = challenge ? calcCurrentDay(challenge.challengeStartDate) : 1;
   const hasStarted = challenge ? getDateKey(new Date()) >= getDateKey(challenge.challengeStartDate) : true;
@@ -337,6 +342,7 @@ export default function App() {
   const checkedWorkouts = checkin.workouts || {};
   const checkedHabits = checkin.habits || {};
   const noteText = challenge?.notes?.[viewingRole]?.[dKey] || "";
+  const dayMessageText = challenge?.messages?.[viewingRole]?.[dKey] || "";
   const doneCount = Object.values(checkedWorkouts).filter(Boolean).length + Object.values(checkedHabits).filter(Boolean).length;
   const totalCount = selectedPlan.workouts.length + selectedPlan.habits.length;
   const completion = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
@@ -738,51 +744,21 @@ export default function App() {
     }));
   }
 
-  function updateGoal(value) {
+  function saveMessage() {
     if (viewingRole !== myRole) return;
-    mutateChallenge((prev) => ({
-      ...prev,
-      users: {
-        ...prev.users,
-        [myRole]: {
-          ...prev.users[myRole],
-          goal: value,
+    mutateChallenge(
+      (prev) => ({
+        ...prev,
+        messages: {
+          ...prev.messages,
+          [myRole]: {
+            ...(prev.messages?.[myRole] || {}),
+            [dKey]: messageDraft,
+          },
         },
-      },
-    }));
-  }
-
-  function updatePreferences(value) {
-    if (viewingRole !== myRole) return;
-    const nextProfile = normalizePreferenceProfile(challenge.users[myRole]?.preferenceProfile, value);
-    mutateChallenge((prev) => ({
-      ...prev,
-      users: {
-        ...prev.users,
-        [myRole]: {
-          ...prev.users[myRole],
-          preferenceProfile: nextProfile,
-          preferences: normalizePreferenceText(value || profileSummary(nextProfile)),
-        },
-      },
-    }));
-  }
-
-  function updatePreferenceOption(optionKey, checked) {
-    if (viewingRole !== myRole) return;
-    const currentProfile = normalizePreferenceProfile(challenge.users[myRole]?.preferenceProfile, challenge.users[myRole]?.preferences);
-    const nextProfile = { ...currentProfile, [optionKey]: checked };
-    mutateChallenge((prev) => ({
-      ...prev,
-      users: {
-        ...prev.users,
-        [myRole]: {
-          ...prev.users[myRole],
-          preferenceProfile: nextProfile,
-          preferences: normalizePreferenceText(prev.users[myRole]?.preferences || profileSummary(nextProfile)),
-        },
-      },
-    }));
+      }),
+      "留言已保存"
+    );
   }
 
   function copyInvite() {
@@ -804,7 +780,12 @@ export default function App() {
   }, [challenge?.challengeStartDate]);
 
   useEffect(() => {
-    if (!supabase || !inviteCode || screen !== "main") return undefined;
+    if (viewingRole === myRole) {
+      setMessageDraft(challenge?.messages?.[myRole]?.[dKey] || "");
+    }
+  }, [challenge, myRole, viewingRole, dKey]);
+
+  useEffect(() => {
 
     const channels = [];
     const handlers = (payload) => {
@@ -1101,32 +1082,6 @@ export default function App() {
             </Card>
 
             <Card className="card glass-card">
-              <CardContent className="card-content section-stack">
-                <div className="section-title"><Users size={18} />个人资料</div>
-                <input
-                  className="text-input"
-                  value={challenge.users[viewingRole].goal || ""}
-                  onChange={(event) => updateGoal(event.target.value)}
-                  disabled={viewingRole !== myRole}
-                />
-                <textarea
-                  className="text-area"
-                  value={challenge.users[viewingRole].preferences || ""}
-                  onChange={(event) => updatePreferences(event.target.value)}
-                  disabled={viewingRole !== myRole}
-                  placeholder="个性化需求：时间限制、训练经验、伤病保护、器械条件等"
-                />
-                <div className="pref-grid">
-                  <label className="pref-item"><input type="checkbox" checked={Boolean(challenge.users[viewingRole].preferenceProfile?.quickMode)} onChange={(event) => updatePreferenceOption("quickMode", event.target.checked)} disabled={viewingRole !== myRole} />时间少(30分钟)</label>
-                  <label className="pref-item"><input type="checkbox" checked={Boolean(challenge.users[viewingRole].preferenceProfile?.beginnerFriendly)} onChange={(event) => updatePreferenceOption("beginnerFriendly", event.target.checked)} disabled={viewingRole !== myRole} />新手友好</label>
-                  <label className="pref-item"><input type="checkbox" checked={Boolean(challenge.users[viewingRole].preferenceProfile?.kneeCare)} onChange={(event) => updatePreferenceOption("kneeCare", event.target.checked)} disabled={viewingRole !== myRole} />膝盖保护</label>
-                  <label className="pref-item"><input type="checkbox" checked={Boolean(challenge.users[viewingRole].preferenceProfile?.backCare)} onChange={(event) => updatePreferenceOption("backCare", event.target.checked)} disabled={viewingRole !== myRole} />下背保护</label>
-                  <label className="pref-item"><input type="checkbox" checked={Boolean(challenge.users[viewingRole].preferenceProfile?.homeTraining)} onChange={(event) => updatePreferenceOption("homeTraining", event.target.checked)} disabled={viewingRole !== myRole} />家用器械优先</label>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="card glass-card">
               <CardContent className="card-content">
                 <div className="section-title"><Activity size={18} />训练记录</div>
                 <textarea
@@ -1136,6 +1091,29 @@ export default function App() {
                   placeholder="记录训练、饮食、睡眠"
                   className="text-area"
                 />
+              </CardContent>
+            </Card>
+
+            <Card className="card glass-card">
+              <CardContent className="card-content section-stack">
+                <div className="section-title"><Heart size={18} />给TA的话</div>
+                {viewingRole === myRole ? (
+                  <>
+                    <textarea
+                      className="text-area"
+                      value={messageDraft}
+                      onChange={(event) => setMessageDraft(event.target.value)}
+                      placeholder="写一句鼓励、感谢或提醒，对方可以看到"
+                    />
+                    <Button className="primary-btn full-btn" onClick={saveMessage}>
+                      保存留言
+                    </Button>
+                  </>
+                ) : (
+                  <div className="info-box">
+                    💌 TA给你的话：{dayMessageText || "（暂无留言）"}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
