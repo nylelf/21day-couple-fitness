@@ -311,6 +311,9 @@ export default function App() {
   const [stayOnLanding, setStayOnLanding] = useState(false);
   const restoreRequestVersionRef = useRef(0);
   const [calendarMonthDate, setCalendarMonthDate] = useState(new Date());
+  const [aiCoachText, setAiCoachText] = useState("");
+  const [aiCoachLoading, setAiCoachLoading] = useState(false);
+  const [aiCoachError, setAiCoachError] = useState("");
 
   const currentDay = challenge ? calcCurrentDay(challenge.challengeStartDate) : 1;
   const hasStarted = challenge ? getDateKey(new Date()) >= getDateKey(challenge.challengeStartDate) : true;
@@ -364,6 +367,50 @@ export default function App() {
     if (selectedDay > currentDay) return "未来计划，仅可预览";
     return "今日可打卡";
   }, [hasStarted, viewingRole, myRole, selectedDay, currentDay]);
+
+  async function fetchAiCoach() {
+    if (!challenge || !myRole) return;
+    setAiCoachLoading(true);
+    setAiCoachError("");
+    try {
+      const todayKey = dayKey(currentDay);
+      const todayPlan = getEffectivePlan(myRole, currentDay);
+      const todayCheckin = normalizeCheckinEntry(challenge.checkins?.[myRole]?.[todayKey]);
+      const todayDone =
+        Object.values(todayCheckin.workouts || {}).filter(Boolean).length +
+        Object.values(todayCheckin.habits || {}).filter(Boolean).length;
+      const todayTotal = (todayPlan.workouts?.length || 0) + (todayPlan.habits?.length || 0);
+      const todayCompletion = todayTotal ? Math.round((todayDone / todayTotal) * 100) : 0;
+      const prefs =
+        challenge.users[myRole]?.preferences ||
+        profileSummary(challenge.users[myRole]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE);
+      const todayNote = challenge.notes?.[myRole]?.[todayKey] || "";
+
+      const response = await fetch("/api/coach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: myRole,
+          completion: todayCompletion,
+          dayNumber: currentDay,
+          preferences: prefs,
+          stats: { male: stats.male.percent, female: stats.female.percent },
+          noteText: todayNote,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "获取 AI 建议失败");
+      }
+      setAiCoachText(data.text || "");
+    } catch (err) {
+      setAiCoachError(err.message || "网络错误，请稍后重试");
+      setAiCoachText("");
+    } finally {
+      setAiCoachLoading(false);
+    }
+  }
 
   function mutateChallenge(mutator, statusOnSuccess = "已同步到云端") {
     if (!challenge || !inviteCode) return;
@@ -938,13 +985,6 @@ export default function App() {
   const partnerName = challenge.users[partner]?.name || roleLabel(partner);
   const selectedChallengeDate = getChallengeDateForDay(challenge.challengeStartDate, selectedDay);
   const challengeEndDateObj = getChallengeDateForDay(challenge.challengeStartDate, DAYS);
-  const aiCoachText = myRole === ROLE_MALE
-    ? completion >= 80
-      ? "今天完成度很高，继续保持蛋白质与睡眠。周五/周日篮球日注意恢复。"
-      : "先完成主训练与核心动作，21 天关键是稳定持续，不是一次练爆。"
-    : completion >= 80
-      ? "今天节奏很好，臀腿和肩背动作继续保持控制感。"
-      : "先保证前 3 个动作完成，逐步把训练习惯固定下来。";
 
   return (
     <div className="app-shell">
@@ -1239,7 +1279,19 @@ export default function App() {
                 <Flame size={22} />
                 <h2 className="section-heading">AI Coach</h2>
               </div>
-              <div className="info-box">{aiCoachText}</div>
+              <div className={`info-box ${aiCoachError ? "error-line" : ""}`}>
+                {aiCoachLoading
+                  ? "正在生成 AI 建议，请稍候…"
+                  : aiCoachError || aiCoachText || "点击「获取 AI 建议」，将根据今日完成率、训练记录与双方进度生成个性化教练反馈。"}
+              </div>
+              <Button
+                className="primary-btn full-btn"
+                onClick={fetchAiCoach}
+                disabled={aiCoachLoading}
+              >
+                <MessageCircle size={16} />
+                {aiCoachLoading ? "生成中…" : "获取 AI 建议"}
+              </Button>
               <div className="info-box">
                 邀请码分享卡：<b>{inviteCode}</b><br />
                 把邀请码发给你的另一半，对方选择剩余身份后即可加入同一个挑战。
