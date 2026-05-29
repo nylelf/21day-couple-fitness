@@ -16,6 +16,13 @@ import {
   Users,
 } from "lucide-react";
 import { getBasePlan, getDefaultGoal } from "./plans";
+import PreferenceForm from "./PreferenceForm";
+import {
+  createDefaultPreferenceProfile,
+  DEFAULT_PREFERENCE_PROFILE,
+  normalizePreferenceProfile,
+  profileSummary,
+} from "./preferenceProfile";
 import { fetchChallengeByCode, saveChallengeToCloud, supabase } from "./supabaseClient";
 import { clearLocalSession, getStoredSessionValues, readLocalSession, writeLocalSession } from "./sessionStorage";
 
@@ -108,64 +115,47 @@ function normalizePreferenceText(text) {
   return (text || "").trim();
 }
 
-const DEFAULT_PREFERENCE_PROFILE = {
-  quickMode: false,
-  beginnerFriendly: false,
-  kneeCare: false,
-  backCare: false,
-  homeTraining: false,
-  customText: "",
-};
-
-function normalizePreferenceProfile(profile, fallbackText = "") {
-  const safe = profile && typeof profile === "object" ? profile : {};
-  return {
-    quickMode: Boolean(safe.quickMode),
-    beginnerFriendly: Boolean(safe.beginnerFriendly),
-    kneeCare: Boolean(safe.kneeCare),
-    backCare: Boolean(safe.backCare),
-    homeTraining: Boolean(safe.homeTraining),
-    customText: normalizePreferenceText(safe.customText || fallbackText),
-  };
-}
-
-function profileSummary(profile) {
-  const parts = [];
-  if (profile.quickMode) parts.push("时间少(30分钟)");
-  if (profile.beginnerFriendly) parts.push("新手友好");
-  if (profile.kneeCare) parts.push("膝盖保护");
-  if (profile.backCare) parts.push("下背保护");
-  if (profile.homeTraining) parts.push("家用器械优先");
-  if (profile.customText) parts.push(profile.customText);
-  return parts.join("；");
-}
-
 function reduceSetsValue(sets) {
   if (typeof sets === "number") return Math.max(1, sets - 1);
   return sets;
 }
 
-function personalizePlan(plan, preferenceText, preferenceProfile = DEFAULT_PREFERENCE_PROFILE) {
-  const normalizedProfile = normalizePreferenceProfile(preferenceProfile, preferenceText);
-  const text = `${normalizePreferenceText(preferenceText)} ${normalizedProfile.customText}`.toLowerCase();
-  if (!text && !normalizedProfile.quickMode && !normalizedProfile.beginnerFriendly && !normalizedProfile.kneeCare && !normalizedProfile.backCare && !normalizedProfile.homeTraining) return plan;
+function personalizePlan(plan, preferenceText, preferenceProfile = DEFAULT_PREFERENCE_PROFILE, role = "") {
+  const normalizedProfile = normalizePreferenceProfile(preferenceProfile, preferenceText, role);
+  const text = `${normalizePreferenceText(preferenceText)} ${normalizedProfile.healthNotes} ${normalizedProfile.otherActivities}`.toLowerCase();
+  const hasStructuredPrefs =
+    normalizedProfile.fitnessLevel !== DEFAULT_PREFERENCE_PROFILE.fitnessLevel ||
+    normalizedProfile.goal !== DEFAULT_PREFERENCE_PROFILE.goal ||
+    normalizedProfile.equipment !== DEFAULT_PREFERENCE_PROFILE.equipment ||
+    normalizedProfile.sessionDuration !== DEFAULT_PREFERENCE_PROFILE.sessionDuration ||
+    normalizedProfile.otherActivities ||
+    normalizedProfile.healthNotes;
+
+  if (!text.trim() && !hasStructuredPrefs) return plan;
 
   let workouts = [...(plan.workouts || [])];
   let habits = [...(plan.habits || [])];
   const tags = [];
 
-  if (normalizedProfile.quickMode || /(30分钟|30 分钟|时间少|忙|quick)/.test(text)) {
+  if (normalizedProfile.sessionDuration <= 30 || /(30分钟|30 分钟|时间少|忙|quick)/.test(text)) {
     workouts = workouts.slice(0, 4);
     habits.push("Quick Session（30分钟内完成）");
     tags.push("快速版");
   }
 
-  if (normalizedProfile.beginnerFriendly || /(新手|初学|beginner)/.test(text)) {
+  if (
+    ["beginner", "novice", "recovery"].includes(normalizedProfile.fitnessLevel) ||
+    /(新手|初学|beginner)/.test(text)
+  ) {
     workouts = workouts.map((item) => ({ ...item, sets: reduceSetsValue(item.sets), note: `${item.note} Beginner-friendly: keep 2 reps in reserve.` }));
     tags.push("新手版");
   }
 
-  if (normalizedProfile.kneeCare || /(膝|knee)/.test(text)) {
+  const needsKneeCare =
+    normalizedProfile.goal === "rehabilitation" ||
+    normalizedProfile.fitnessLevel === "recovery" ||
+    /(膝|knee)/.test(text);
+  if (needsKneeCare) {
     workouts = workouts.map((item) =>
       /(深蹲|腿举|跳|squat|leg press|jump)/i.test(item.name)
         ? { ...item, note: `${item.note} Knee-care: reduce load 10-20% and keep pain-free range.` }
@@ -175,7 +165,11 @@ function personalizePlan(plan, preferenceText, preferenceProfile = DEFAULT_PREFE
     tags.push("膝盖友好");
   }
 
-  if (normalizedProfile.backCare || /(腰|lower back|back pain)/.test(text)) {
+  const needsBackCare =
+    normalizedProfile.goal === "rehabilitation" ||
+    normalizedProfile.fitnessLevel === "recovery" ||
+    /(腰|lower back|back pain|腰椎)/.test(text);
+  if (needsBackCare) {
     workouts = workouts.map((item) =>
       /(硬拉|deadlift|good morning)/i.test(item.name)
         ? { ...item, note: `${item.note} Back-care: prioritize neutral spine and lighter load.` }
@@ -185,7 +179,11 @@ function personalizePlan(plan, preferenceText, preferenceProfile = DEFAULT_PREFE
     tags.push("腰背友好");
   }
 
-  if (normalizedProfile.homeTraining || /(家|home|dumbbell|弹力带)/.test(text)) {
+  if (
+    normalizedProfile.equipment === "home" ||
+    normalizedProfile.equipment === "bodyweight" ||
+    /(家|home|dumbbell|弹力带|徒手)/.test(text)
+  ) {
     workouts = workouts.map((item) => ({
       ...item,
       note: `${item.note} Home-option: dumbbell/band/bodyweight variation is acceptable.`,
@@ -221,15 +219,21 @@ function normalizeChallenge(data) {
       male: {
         name: data.users?.male?.name || "",
         goal: data.users?.male?.goal || getDefaultGoal(ROLE_MALE),
-        preferenceProfile: normalizePreferenceProfile(data.users?.male?.preferenceProfile, data.users?.male?.preferences),
-        preferences: normalizePreferenceText(data.users?.male?.preferences || profileSummary(normalizePreferenceProfile(data.users?.male?.preferenceProfile))),
+        preferenceProfile: normalizePreferenceProfile(data.users?.male?.preferenceProfile, data.users?.male?.preferences, ROLE_MALE),
+        preferences: normalizePreferenceText(
+          data.users?.male?.preferences ||
+            profileSummary(normalizePreferenceProfile(data.users?.male?.preferenceProfile, data.users?.male?.preferences, ROLE_MALE), ROLE_MALE)
+        ),
         joinedAt: data.users?.male?.joinedAt || "",
       },
       female: {
         name: data.users?.female?.name || "",
         goal: data.users?.female?.goal || getDefaultGoal(ROLE_FEMALE),
-        preferenceProfile: normalizePreferenceProfile(data.users?.female?.preferenceProfile, data.users?.female?.preferences),
-        preferences: normalizePreferenceText(data.users?.female?.preferences || profileSummary(normalizePreferenceProfile(data.users?.female?.preferenceProfile))),
+        preferenceProfile: normalizePreferenceProfile(data.users?.female?.preferenceProfile, data.users?.female?.preferences, ROLE_FEMALE),
+        preferences: normalizePreferenceText(
+          data.users?.female?.preferences ||
+            profileSummary(normalizePreferenceProfile(data.users?.female?.preferenceProfile, data.users?.female?.preferences, ROLE_FEMALE), ROLE_FEMALE)
+        ),
         joinedAt: data.users?.female?.joinedAt || "",
       },
     },
@@ -270,6 +274,7 @@ function normalizeCheckinEntry(entry) {
 function createChallenge(inviteCode, myRole, nickname, challengeStartDate, preferences = "", preferenceProfile = DEFAULT_PREFERENCE_PROFILE) {
   const now = new Date().toISOString();
   const startDate = challengeStartDate || now.slice(0, 10);
+  const normalizedProfile = normalizePreferenceProfile(preferenceProfile, preferences, myRole);
   const base = normalizeChallenge({
     inviteCode,
     challengeStartDate: startDate,
@@ -277,8 +282,8 @@ function createChallenge(inviteCode, myRole, nickname, challengeStartDate, prefe
       [myRole]: {
         name: nickname.trim(),
         goal: getDefaultGoal(myRole),
-        preferenceProfile: normalizePreferenceProfile(preferenceProfile, preferences),
-        preferences: normalizePreferenceText(preferences || profileSummary(normalizePreferenceProfile(preferenceProfile))),
+        preferenceProfile: normalizedProfile,
+        preferences: normalizePreferenceText(preferences || profileSummary(normalizedProfile, myRole)),
         joinedAt: now,
       },
     },
@@ -304,14 +309,12 @@ export default function App() {
 
   const [createRole, setCreateRole] = useState(ROLE_MALE);
   const [createNickname, setCreateNickname] = useState("");
-  const [createPreferences, setCreatePreferences] = useState("");
-  const [createPreferenceProfile, setCreatePreferenceProfile] = useState({ ...DEFAULT_PREFERENCE_PROFILE });
+  const [createPreferenceProfile, setCreatePreferenceProfile] = useState(createDefaultPreferenceProfile());
   const [createStartDate, setCreateStartDate] = useState(formatDateOnly(new Date()));
   const [joinCode, setJoinCode] = useState("");
   const [joinRole, setJoinRole] = useState(ROLE_FEMALE);
   const [joinNickname, setJoinNickname] = useState("");
-  const [joinPreferences, setJoinPreferences] = useState("");
-  const [joinPreferenceProfile, setJoinPreferenceProfile] = useState({ ...DEFAULT_PREFERENCE_PROFILE });
+  const [joinPreferenceProfile, setJoinPreferenceProfile] = useState(createDefaultPreferenceProfile());
   const [stayOnLanding, setStayOnLanding] = useState(false);
   const restoreRequestVersionRef = useRef(0);
   const [calendarMonthDate, setCalendarMonthDate] = useState(new Date());
@@ -331,7 +334,7 @@ export default function App() {
     const base = custom?.workouts?.length ? custom : getBasePlan(role, day, challenge?.challengeStartDate);
     const pref = challenge?.users?.[role]?.preferences || "";
     const prefProfile = challenge?.users?.[role]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE;
-    return personalizePlan(base, pref, prefProfile);
+    return personalizePlan(base, pref, prefProfile, role);
   };
   const selectedPlan = useMemo(() => {
     if (!challenge) return personalizePlan(getBasePlan(viewingRole, selectedDay), "");
@@ -389,7 +392,7 @@ export default function App() {
       const todayCompletion = todayTotal ? Math.round((todayDone / todayTotal) * 100) : 0;
       const prefs =
         challenge.users[myRole]?.preferences ||
-        profileSummary(challenge.users[myRole]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE);
+        profileSummary(challenge.users[myRole]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE, myRole);
       const todayNote = challenge.notes?.[myRole]?.[todayKey] || "";
 
       const response = await fetch("/api/coach", {
@@ -543,9 +546,8 @@ export default function App() {
   async function handleCreateChallenge() {
     resetJoinCreateErrors();
     const name = createNickname.trim();
-    const preferences = normalizePreferenceText(createPreferences);
-    const preferenceProfile = normalizePreferenceProfile(createPreferenceProfile, preferences);
-    const preferenceSummary = normalizePreferenceText(preferences || profileSummary(preferenceProfile));
+    const preferenceProfile = normalizePreferenceProfile(createPreferenceProfile, "", createRole);
+    const preferenceSummary = profileSummary(preferenceProfile, createRole);
     const todayKey = getDateKey(new Date());
     const startDate = createStartDate || todayKey;
     if (!name) {
@@ -585,9 +587,8 @@ export default function App() {
     resetJoinCreateErrors();
     const code = joinCode.trim().toUpperCase();
     const nickname = joinNickname.trim();
-    const preferences = normalizePreferenceText(joinPreferences);
-    const preferenceProfile = normalizePreferenceProfile(joinPreferenceProfile, preferences);
-    const preferenceSummary = normalizePreferenceText(preferences || profileSummary(preferenceProfile));
+    const preferenceProfile = normalizePreferenceProfile(joinPreferenceProfile, "", joinRole);
+    const preferenceSummary = profileSummary(preferenceProfile, joinRole);
     if (!code || code.length !== 6) {
       setErrorMsg("邀请码应为 6 位");
       return;
@@ -615,7 +616,7 @@ export default function App() {
     if (occupiedName) {
       // Allow returning user to reclaim the same role by matching nickname.
       if (occupiedName === nickname) {
-        if (preferenceSummary || profileSummary(preferenceProfile)) {
+        if (preferenceSummary || profileSummary(preferenceProfile, joinRole)) {
           const reclaimed = {
             ...remote,
             users: {
@@ -820,10 +821,10 @@ export default function App() {
                 </div>
                 <div className="icon-pill"><Heart size={22} /></div>
               </div>
-              <Button className="primary-btn full-btn" onClick={() => { setScreen("create"); setCreateRole(ROLE_MALE); setCreateStartDate(formatDateOnly(new Date())); setCreatePreferences(""); setCreatePreferenceProfile({ ...DEFAULT_PREFERENCE_PROFILE }); }}>
+              <Button className="primary-btn full-btn" onClick={() => { setScreen("create"); setCreateRole(ROLE_MALE); setCreateStartDate(formatDateOnly(new Date())); setCreatePreferenceProfile(createDefaultPreferenceProfile()); }}>
                 <Users size={16} />Create Couple Challenge
               </Button>
-              <Button className="ghost-btn full-btn" onClick={() => { setScreen("join"); setJoinRole(ROLE_FEMALE); setJoinPreferences(""); setJoinPreferenceProfile({ ...DEFAULT_PREFERENCE_PROFILE }); }}>
+              <Button className="ghost-btn full-btn" onClick={() => { setScreen("join"); setJoinRole(ROLE_FEMALE); setJoinPreferenceProfile(createDefaultPreferenceProfile()); }}>
                 <UserPlus size={16} />Join Challenge
               </Button>
               <div className="footer-note">创建者只需填写自己的身份和昵称，另一半用邀请码加入并填写自己的信息。</div>
@@ -858,20 +859,12 @@ export default function App() {
                 value={createStartDate}
                 onChange={(event) => setCreateStartDate(event.target.value)}
               />
-              <textarea
-                className="text-area"
-                value={createPreferences}
-                onChange={(event) => setCreatePreferences(event.target.value)}
-                placeholder="额外个性化需求（可选）：如每次30分钟、膝盖不适、偏新手、仅家用器械等"
+              <PreferenceForm
+                role={createRole}
+                value={createPreferenceProfile}
+                onChange={setCreatePreferenceProfile}
               />
-              <div className="pref-grid">
-                <label className="pref-item"><input type="checkbox" checked={createPreferenceProfile.quickMode} onChange={(event) => setCreatePreferenceProfile((prev) => ({ ...prev, quickMode: event.target.checked }))} />时间少(30分钟)</label>
-                <label className="pref-item"><input type="checkbox" checked={createPreferenceProfile.beginnerFriendly} onChange={(event) => setCreatePreferenceProfile((prev) => ({ ...prev, beginnerFriendly: event.target.checked }))} />新手友好</label>
-                <label className="pref-item"><input type="checkbox" checked={createPreferenceProfile.kneeCare} onChange={(event) => setCreatePreferenceProfile((prev) => ({ ...prev, kneeCare: event.target.checked }))} />膝盖保护</label>
-                <label className="pref-item"><input type="checkbox" checked={createPreferenceProfile.backCare} onChange={(event) => setCreatePreferenceProfile((prev) => ({ ...prev, backCare: event.target.checked }))} />下背保护</label>
-                <label className="pref-item"><input type="checkbox" checked={createPreferenceProfile.homeTraining} onChange={(event) => setCreatePreferenceProfile((prev) => ({ ...prev, homeTraining: event.target.checked }))} />家用器械优先</label>
-              </div>
-              <div className="footer-note">开始日期可选今天或未来日期。结构化选项 + 文本补充会一起用于微调计划。</div>
+              <div className="footer-note">开始日期可选今天或未来日期。偏好设置会用于微调训练计划。</div>
               {errorMsg && <div className="error-line">{errorMsg}</div>}
               <Button className="primary-btn full-btn" onClick={handleCreateChallenge}>生成邀请码并创建</Button>
               <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); }}>返回</Button>
@@ -906,19 +899,11 @@ export default function App() {
                 onChange={(event) => setJoinNickname(event.target.value)}
                 placeholder="输入你的昵称"
               />
-              <textarea
-                className="text-area"
-                value={joinPreferences}
-                onChange={(event) => setJoinPreferences(event.target.value)}
-                placeholder="你的个性化需求（可选）：如时间少、初学者、膝盖或下背要保护"
+              <PreferenceForm
+                role={joinRole}
+                value={joinPreferenceProfile}
+                onChange={setJoinPreferenceProfile}
               />
-              <div className="pref-grid">
-                <label className="pref-item"><input type="checkbox" checked={joinPreferenceProfile.quickMode} onChange={(event) => setJoinPreferenceProfile((prev) => ({ ...prev, quickMode: event.target.checked }))} />时间少(30分钟)</label>
-                <label className="pref-item"><input type="checkbox" checked={joinPreferenceProfile.beginnerFriendly} onChange={(event) => setJoinPreferenceProfile((prev) => ({ ...prev, beginnerFriendly: event.target.checked }))} />新手友好</label>
-                <label className="pref-item"><input type="checkbox" checked={joinPreferenceProfile.kneeCare} onChange={(event) => setJoinPreferenceProfile((prev) => ({ ...prev, kneeCare: event.target.checked }))} />膝盖保护</label>
-                <label className="pref-item"><input type="checkbox" checked={joinPreferenceProfile.backCare} onChange={(event) => setJoinPreferenceProfile((prev) => ({ ...prev, backCare: event.target.checked }))} />下背保护</label>
-                <label className="pref-item"><input type="checkbox" checked={joinPreferenceProfile.homeTraining} onChange={(event) => setJoinPreferenceProfile((prev) => ({ ...prev, homeTraining: event.target.checked }))} />家用器械优先</label>
-              </div>
               {errorMsg && <div className="error-line">{errorMsg}</div>}
               <Button className="primary-btn full-btn" onClick={handleJoinChallenge}>加入挑战</Button>
               <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); }}>返回</Button>
@@ -1197,7 +1182,8 @@ export default function App() {
                         ? personalizePlan(
                           challenge.plans[viewingRole][k],
                           challenge.users?.[viewingRole]?.preferences || "",
-                          challenge.users?.[viewingRole]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE
+                          challenge.users?.[viewingRole]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE,
+                          viewingRole
                         )
                         : getEffectivePlan(viewingRole, day);
                       const dayCheckin = normalizeCheckinEntry(challenge.checkins?.[viewingRole]?.[k]);

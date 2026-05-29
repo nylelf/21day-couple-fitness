@@ -456,6 +456,35 @@ body {
   text-transform: uppercase;
 }
 
+.pref-field-label {
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+  color: #dcc9f2;
+}
+
+.pref-section-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #f3e8ff;
+}
+
+.pref-female-section {
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.pref-option-grid .role-btn {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  padding: 10px 8px;
+  white-space: normal;
+  min-height: 44px;
+}
+
+.pref-form.section-stack {
+  gap: 16px;
+}
+
 .pref-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
