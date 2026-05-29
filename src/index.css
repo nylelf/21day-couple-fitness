@@ -485,6 +485,13 @@ body {
   gap: 16px;
 }
 
+.plan-pending-box {
+  text-align: center;
+  padding: 28px 16px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
 .toast-line {
   border-color: rgba(255, 182, 77, 0.45);
   background: rgba(255, 182, 77, 0.12);

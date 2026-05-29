@@ -30,6 +30,17 @@ const DAYS = 21;
 const ROLE_MALE = "male";
 const ROLE_FEMALE = "female";
 
+const PLAN_PENDING_PLACEHOLDER = {
+  pending: true,
+  title: "等待对方加入后生成专属计划",
+  workouts: [],
+  habits: [],
+};
+
+function createPendingPlan() {
+  return { ...PLAN_PENDING_PLACEHOLDER };
+}
+
 function Card({ className = "", children }) {
   return <div className={className}>{children}</div>;
 }
@@ -373,10 +384,7 @@ export default function App() {
     if (aiPlan?.workouts?.length) {
       return aiPlan;
     }
-    const base = getBasePlan(role, day, challenge?.challengeStartDate);
-    const pref = challenge?.users?.[role]?.preferences || "";
-    const prefProfile = challenge?.users?.[role]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE;
-    return personalizePlan(base, pref, prefProfile, role);
+    return createPendingPlan();
   };
   const selectedPlan = useMemo(() => {
     if (!challenge) return personalizePlan(getBasePlan(viewingRole, selectedDay), "");
@@ -635,8 +643,8 @@ export default function App() {
       }
       const created = createChallenge(code, createRole, name, startDate, preferenceSummary, preferenceProfile);
       created.plans = {
-        ...created.plans,
-        [createRole]: rolePlans,
+        male: createRole === ROLE_MALE ? rolePlans : {},
+        female: createRole === ROLE_FEMALE ? rolePlans : {},
       };
       const saved = await saveChallengeToCloud(code, created);
       if (saved.error) {
@@ -683,48 +691,55 @@ export default function App() {
     const remote = normalizeChallenge(result.data.data);
     const occupiedName = (remote.users[joinRole]?.name || "").trim();
 
-    setPlanGenerating(true);
-    setToastMsg("");
-    let rolePlans;
-    let usedFallback = false;
-    try {
-      const generated = await resolveRolePlans(joinRole, preferenceProfile, remote.challengeStartDate);
-      rolePlans = generated.plans;
-      usedFallback = generated.usedFallback;
-    } finally {
-      setPlanGenerating(false);
+    if (occupiedName && occupiedName !== nickname) {
+      setErrorMsg("这个角色已经被占用，请选择另一个角色。");
+      return;
     }
 
-    if (occupiedName) {
-      // Allow returning user to reclaim the same role by matching nickname.
-      if (occupiedName === nickname) {
-        if (preferenceSummary || profileSummary(preferenceProfile, joinRole)) {
-          const reclaimed = {
-            ...remote,
-            users: {
-              ...remote.users,
-              [joinRole]: {
-                ...remote.users[joinRole],
-                preferenceProfile,
-                preferences: preferenceSummary,
-              },
-            },
-            plans: {
-              ...remote.plans,
-              [joinRole]: rolePlans,
-            },
-          };
-          const saved = await saveChallengeToCloud(code, reclaimed);
-          if (!saved.error) {
-            if (usedFallback) showToast("计划生成失败，已使用默认计划");
-            applyChallengeSession(reclaimed, joinRole, code, nickname, "已恢复你的挑战身份", { force: true });
-            return;
-          }
-        }
-        applyChallengeSession(remote, joinRole, code, nickname, "已恢复你的挑战身份", { force: true });
-        return;
+    const isReclaim = Boolean(occupiedName && occupiedName === nickname);
+    const shouldRefreshPlan = !isReclaim || Boolean(preferenceSummary || profileSummary(preferenceProfile, joinRole));
+
+    let rolePlans = remote.plans?.[joinRole] || {};
+    let usedFallback = false;
+
+    if (shouldRefreshPlan) {
+      setPlanGenerating(true);
+      setToastMsg("");
+      try {
+        rolePlans = await requestGeneratedPlan(joinRole, preferenceProfile, remote.challengeStartDate);
+      } catch {
+        rolePlans = buildFallbackPlans(joinRole, remote.challengeStartDate);
+        usedFallback = true;
+      } finally {
+        setPlanGenerating(false);
       }
-      setErrorMsg("这个角色已经被占用，请选择另一个角色。");
+    }
+
+    if (isReclaim) {
+      if (shouldRefreshPlan) {
+        const reclaimed = {
+          ...remote,
+          users: {
+            ...remote.users,
+            [joinRole]: {
+              ...remote.users[joinRole],
+              preferenceProfile,
+              preferences: preferenceSummary,
+            },
+          },
+          plans: {
+            ...remote.plans,
+            [joinRole]: rolePlans,
+          },
+        };
+        const saved = await saveChallengeToCloud(code, reclaimed);
+        if (!saved.error) {
+          if (usedFallback) showToast("计划生成失败，已使用默认计划");
+          applyChallengeSession(reclaimed, joinRole, code, nickname, "已恢复你的挑战身份", { force: true });
+          return;
+        }
+      }
+      applyChallengeSession(remote, joinRole, code, nickname, "已恢复你的挑战身份", { force: true });
       return;
     }
 
@@ -1109,6 +1124,25 @@ export default function App() {
 
         {tab === "today" && (
           <div className="section-stack">
+            {selectedPlan.pending ? (
+              <Card className="card glass-card">
+                <CardContent className="card-content section-stack">
+                  <div className="today-top">
+                    <div>
+                      <div className="day-label">Day {selectedDay} / 21</div>
+                      <div className="today-goal">{getDateKey(selectedChallengeDate)}</div>
+                      <h2 className="today-title">{roleLabel(viewingRole)} 训练计划</h2>
+                    </div>
+                  </div>
+                  <div className="info-box plan-pending-box">{selectedPlan.title}</div>
+                  <div className="day-nav">
+                    <Button className="dark-btn" onClick={() => setSelectedDay((prev) => Math.max(1, prev - 1))}>上一天</Button>
+                    <Button className="dark-btn" onClick={() => setSelectedDay((prev) => Math.min(21, prev + 1))}>下一天</Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <>
             <Card className="card white-card">
               <CardContent className="card-content card-large">
                 <div className="today-top">
@@ -1173,7 +1207,11 @@ export default function App() {
                 </div>
               </CardContent>
             </Card>
+              </>
+            )}
 
+            {!selectedPlan.pending && (
+              <>
             <Card className="card glass-card">
               <CardContent className="card-content">
                 <div className="section-title"><Activity size={18} />训练记录</div>
@@ -1209,6 +1247,8 @@ export default function App() {
                 )}
               </CardContent>
             </Card>
+              </>
+            )}
           </div>
         )}
 
