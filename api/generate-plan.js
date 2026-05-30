@@ -94,41 +94,53 @@ function roleDisplay(role) {
 
 function buildUserPrompt({ role, preferenceProfile, challengeStartDate }) {
   const profile = preferenceProfile || {};
-  const fitnessLevel = FITNESS_LEVEL_LABELS[profile.fitnessLevel] || profile.fitnessLevel || "未填写";
+  const gender = roleDisplay(role);
+  const level = FITNESS_LEVEL_LABELS[profile.fitnessLevel] || profile.fitnessLevel || "未填写";
   const goal = GOAL_LABELS[profile.goal] || profile.goal || "未填写";
   const equipment = EQUIPMENT_LABELS[profile.equipment] || profile.equipment || "未填写";
-  const sessionDuration = profile.sessionDuration ? `${profile.sessionDuration}分钟` : "未填写";
+  const duration = profile.sessionDuration ? `${profile.sessionDuration}分钟` : "未填写";
   const otherActivities = profile.otherActivities?.trim() || "无";
   const healthNotes = profile.healthNotes?.trim() || "无";
 
-  let periodSection = "";
+  let periodInfo = "";
   if (role === "female" && profile.lastPeriodDate) {
     const adjustments = getPeriodAdjustmentDays(
       challengeStartDate,
       profile.lastPeriodDate,
       profile.cycleLength
     );
-    if (adjustments.length) {
-      const lines = adjustments.map(
-        (item) => `挑战第 ${item.challengeDay} 天（${item.date}，经期第 ${item.periodDay} 天）`
-      );
-      periodSection = `\n【经期调整】上次经期第一天：${profile.lastPeriodDate}，周期：${
-        profile.cycleLength === "irregular" ? "不规律（按28天估算）" : `${profile.cycleLength}天`
-      }\n以下挑战日需降低训练强度，改为轻度拉伸或散步，workouts 的 note 里注明「经期调整日」；habits 改为温和恢复类（热敷、瑜伽、补铁食物等），不要高强度训练建议：\n${lines.join("\n")}`;
+    const periodDays = adjustments.map((item) => item.challengeDay);
+    if (periodDays.length > 0) {
+      periodInfo = `【经期特别安排】\n挑战第 ${periodDays.join("、")} 天为经期，这几天必须：\n- 只安排瑜伽、散步或轻度拉伸\n- habits全部换成经期调理建议（热敷、补铁、温和运动）\n- title注明"经期调整日"\n- workouts的note注明"经期轻度训练"`;
     } else {
-      periodSection = `\n【经期信息】上次经期第一天：${profile.lastPeriodDate}，21天挑战期内无完整经期第1-5天重叠；若接近经期仍适当降低强度。`;
+      periodInfo = `\n【经期信息】上次经期第一天：${profile.lastPeriodDate}，21天挑战期内无完整经期第1-5天重叠；若接近经期仍适当降低强度。`;
     }
   }
 
   return `请为以下用户生成完整的 21 天训练计划（day-1 到 day-21）。
 
-【性别】${roleDisplay(role)}
-【训练年限】${fitnessLevel}
-【训练目标】${goal}
-【可用器材】${equipment}
-【每次训练时间】${sessionDuration}
-【每周其他运动】${otherActivities}
-【身体状况备注】${healthNotes}${periodSection}
+请严格根据以下学员信息制定个性化训练计划，每一项都必须体现在计划中：
+
+【基本信息】
+- 性别：${gender}
+- 训练年限/水平：${level}（必须匹配难度，新手动作简单组数少，高级强度大）
+- 训练目标：${goal}（所有动作选择和组数安排都要围绕此目标）
+- 可用器材：${equipment}（只能用这些器材，不能出现没有的器材）
+- 每次训练时间：${duration}（动作数量和组数必须符合这个时间）
+
+【特殊安排】
+- 每周其他运动：${otherActivities}（这些运动日当天只安排15分钟拉伸恢复，不安排正式训练，title注明"运动日恢复"）
+- 身体状况备注：${healthNotes}（有伤病或特殊情况的动作必须规避或替换）
+
+${periodInfo}
+
+【重要规则】
+- 训练年限是新手：每个动作都要在note里写清楚动作要点，组数不超过3组
+- 训练年限是高级：可以安排复合动作、大重量，组数4-5组
+- 目标是减脂：多安排复合动作和有氧，休息时间短（45-60s）
+- 目标是增肌：多安排孤立动作，休息时间长（75-90s）
+- 目标是臀腿增长：重点安排深蹲、硬拉、臀推类动作
+- 每周其他运动日：当天计划必须是轻度恢复，不能有高强度训练
 
 计划要求：
 1. 第 1-7 天：基础适应期（动作规范、中等偏低强度）
