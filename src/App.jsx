@@ -687,6 +687,9 @@ export default function App() {
       setPlanGenerating(false);
     }
 
+    console.log("生成的计划 day-1:", JSON.stringify(rolePlans?.["day-1"]));
+    console.log("isStoredAiDayPlan:", isStoredAiDayPlan(rolePlans?.["day-1"]));
+
     let attempts = 0;
     while (attempts < 4) {
       const code = generateInviteCode();
