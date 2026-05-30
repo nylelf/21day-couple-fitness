@@ -391,6 +391,7 @@ export default function App() {
   const [aiCoachError, setAiCoachError] = useState("");
   const [messageDraft, setMessageDraft] = useState("");
   const [planGenerating, setPlanGenerating] = useState(false);
+  const [planProgress, setPlanProgress] = useState(0);
   const [toastMsg, setToastMsg] = useState("");
   const toastTimerRef = useRef(null);
 
@@ -667,6 +668,10 @@ export default function App() {
 
     setPlanGenerating(true);
     setToastMsg("");
+    setPlanProgress(0);
+    const progressInterval = setInterval(() => {
+      setPlanProgress((p) => (p < 90 ? p + 1 : p));
+    }, 1200);
     let rolePlans;
     let usedFallback = false;
     try {
@@ -674,6 +679,8 @@ export default function App() {
       rolePlans = result.plans;
       usedFallback = result.usedFallback;
     } finally {
+      clearInterval(progressInterval);
+      setPlanProgress(100);
       setPlanGenerating(false);
     }
 
@@ -754,13 +761,26 @@ export default function App() {
     }
   }
 
-  function handleJoinDirectEnter() {
+  async function handleJoinDirectEnter() {
     if (!joinRemoteChallenge) return;
     const code = joinCode.trim().toUpperCase();
     const nickname = joinNickname.trim();
-    // 老用户直接进入：不调用 generate-plan，使用 Supabase 已有 plans.{joinRole}
-    applyChallengeSession(joinRemoteChallenge, joinRole, code, nickname, "欢迎回来！", { force: true });
-    resetJoinFlow();
+    const day1Plan = joinRemoteChallenge.plans?.[joinRole]?.["day-1"];
+    if (isStoredAiDayPlan(day1Plan)) {
+      applyChallengeSession(joinRemoteChallenge, joinRole, code, nickname, "欢迎回来！", { force: true });
+      resetJoinFlow();
+      return;
+    }
+
+    const existing = joinRemoteChallenge.users?.[joinRole]?.preferenceProfile;
+    setJoinPreferenceProfile(
+      existing
+        ? { ...normalizePreferenceProfile(existing, "", joinRole) }
+        : createDefaultPreferenceProfile()
+    );
+    setJoinIsReturningUpdate(true);
+    setJoinStep("preferences");
+    await handleJoinCompleteWithPreferences();
   }
 
   function handleJoinStartUpdatePreferences() {
@@ -808,6 +828,10 @@ export default function App() {
     // 新用户加入 / 老用户更新偏好：调用 /api/generate-plan
     setPlanGenerating(true);
     setToastMsg("");
+    setPlanProgress(0);
+    const progressInterval = setInterval(() => {
+      setPlanProgress((p) => (p < 90 ? p + 1 : p));
+    }, 1200);
     let rolePlans;
     let usedFallback = false;
     try {
@@ -817,6 +841,8 @@ export default function App() {
       rolePlans = buildFallbackPlans(joinRole, remote.challengeStartDate);
       usedFallback = true;
     } finally {
+      clearInterval(progressInterval);
+      setPlanProgress(100);
       setPlanGenerating(false);
     }
 
@@ -1068,13 +1094,39 @@ export default function App() {
               <div className="footer-note">开始日期可选今天或未来日期。偏好设置会用于微调训练计划。</div>
               {toastMsg && <div className="info-box toast-line">{toastMsg}</div>}
               {errorMsg && <div className="error-line">{errorMsg}</div>}
-              <Button
-                className="primary-btn full-btn"
-                onClick={handleCreateChallenge}
-                disabled={planGenerating}
-              >
-                {planGenerating ? "🤖 AI 正在为你生成专属计划，请稍候（约10-20秒）…" : "生成邀请码并创建"}
-              </Button>
+              {planGenerating ? (
+                <div style={{ padding: "40px 20px", textAlign: "center" }}>
+                  <p style={{ marginBottom: 16 }}>🤖 AI 正在生成你的专属计划...</p>
+                  <div style={{ background: "#2a2a3d", borderRadius: 8, height: 12, margin: "16px 0" }}>
+                    <div
+                      style={{
+                        background: "linear-gradient(90deg, #7c3aed, #ec4899)",
+                        borderRadius: 8,
+                        height: "100%",
+                        width: `${planProgress}%`,
+                        transition: "width 1.2s ease",
+                      }}
+                    />
+                  </div>
+                  <p style={{ color: "#a78bfa" }}>{planProgress}%</p>
+                  <p style={{ fontSize: 12, color: "#666", marginTop: 8 }}>
+                    {planProgress < 30
+                      ? "正在分析训练偏好..."
+                      : planProgress < 60
+                        ? "正在制定训练计划..."
+                        : planProgress < 85
+                          ? "正在优化饮食建议..."
+                          : "即将完成..."}
+                  </p>
+                </div>
+              ) : (
+                <Button
+                  className="primary-btn full-btn"
+                  onClick={handleCreateChallenge}
+                >
+                  生成邀请码并创建
+                </Button>
+              )}
               <Button className="ghost-btn full-btn" onClick={() => { setScreen("landing"); setErrorMsg(""); setToastMsg(""); }} disabled={planGenerating}>返回</Button>
             </CardContent>
           </Card>
@@ -1141,17 +1193,39 @@ export default function App() {
                 />
                 {toastMsg && <div className="info-box toast-line">{toastMsg}</div>}
                 {errorMsg && <div className="error-line">{errorMsg}</div>}
-                <Button
-                  className="primary-btn full-btn"
-                  onClick={handleJoinCompleteWithPreferences}
-                  disabled={planGenerating}
-                >
-                  {planGenerating
-                    ? "🤖 AI 正在为你生成专属计划，请稍候（约10-20秒）…"
-                    : joinIsReturningUpdate
-                      ? "保存并重新生成计划"
-                      : "加入挑战"}
-                </Button>
+                {planGenerating ? (
+                  <div style={{ padding: "40px 20px", textAlign: "center" }}>
+                    <p style={{ marginBottom: 16 }}>🤖 AI 正在生成你的专属计划...</p>
+                    <div style={{ background: "#2a2a3d", borderRadius: 8, height: 12, margin: "16px 0" }}>
+                      <div
+                        style={{
+                          background: "linear-gradient(90deg, #7c3aed, #ec4899)",
+                          borderRadius: 8,
+                          height: "100%",
+                          width: `${planProgress}%`,
+                          transition: "width 1.2s ease",
+                        }}
+                      />
+                    </div>
+                    <p style={{ color: "#a78bfa" }}>{planProgress}%</p>
+                    <p style={{ fontSize: 12, color: "#666", marginTop: 8 }}>
+                      {planProgress < 30
+                        ? "正在分析训练偏好..."
+                        : planProgress < 60
+                          ? "正在制定训练计划..."
+                          : planProgress < 85
+                            ? "正在优化饮食建议..."
+                            : "即将完成..."}
+                    </p>
+                  </div>
+                ) : (
+                  <Button
+                    className="primary-btn full-btn"
+                    onClick={handleJoinCompleteWithPreferences}
+                  >
+                    {joinIsReturningUpdate ? "保存并重新生成计划" : "加入挑战"}
+                  </Button>
+                )}
                 <Button
                   className="ghost-btn full-btn"
                   onClick={() => {
