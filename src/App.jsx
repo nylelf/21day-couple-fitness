@@ -42,13 +42,18 @@ function createPendingPlan() {
 }
 
 function isStoredAiDayPlan(plan) {
-  return Boolean(
-    plan &&
-    typeof plan === "object" &&
-    !plan.pending &&
-    Array.isArray(plan.workouts) &&
-    plan.workouts.length > 0
-  );
+  if (!plan || typeof plan !== "object") return false;
+  if (plan.pending) return false;
+  if (!Array.isArray(plan.workouts) || plan.workouts.length === 0) return false;
+  // 旧 fallback 计划的 habits 是固定4条英文，AI 计划的 habits 是中文个性化内容
+  // 用第一条 habit 判断：如果包含 "Protein Target" 或 "Water 2L" 则是旧模板
+  if (Array.isArray(plan.habits) && plan.habits.length > 0) {
+    const firstHabit = plan.habits[0] || "";
+    if (firstHabit.includes("Protein Target") || firstHabit.includes("Water 2L")) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function Card({ className = "", children }) {
@@ -669,7 +674,7 @@ export default function App() {
     setPlanGenerating(true);
     setToastMsg("");
     setPlanProgress(0);
-    const progressInterval = setInterval(() => {
+    const _progressTimer = setInterval(() => {
       setPlanProgress((p) => (p < 90 ? p + 1 : p));
     }, 1200);
     let rolePlans;
@@ -679,7 +684,7 @@ export default function App() {
       rolePlans = result.plans;
       usedFallback = result.usedFallback;
     } finally {
-      clearInterval(progressInterval);
+      clearInterval(_progressTimer);
       setPlanProgress(100);
       setPlanGenerating(false);
     }
@@ -829,7 +834,7 @@ export default function App() {
     setPlanGenerating(true);
     setToastMsg("");
     setPlanProgress(0);
-    const progressInterval = setInterval(() => {
+    const _progressTimer = setInterval(() => {
       setPlanProgress((p) => (p < 90 ? p + 1 : p));
     }, 1200);
     let rolePlans;
@@ -841,7 +846,7 @@ export default function App() {
       rolePlans = buildFallbackPlans(joinRole, remote.challengeStartDate);
       usedFallback = true;
     } finally {
-      clearInterval(progressInterval);
+      clearInterval(_progressTimer);
       setPlanProgress(100);
       setPlanGenerating(false);
     }
@@ -1096,7 +1101,7 @@ export default function App() {
               {errorMsg && <div className="error-line">{errorMsg}</div>}
               {planGenerating ? (
                 <div style={{ padding: "40px 20px", textAlign: "center" }}>
-                  <p style={{ marginBottom: 16 }}>🤖 AI 正在生成你的专属计划...</p>
+                  <p style={{ marginBottom: 16, fontSize: 16 }}>🤖 AI 正在生成你的专属计划...</p>
                   <div style={{ background: "#2a2a3d", borderRadius: 8, height: 12, margin: "16px 0" }}>
                     <div
                       style={{
@@ -1108,7 +1113,7 @@ export default function App() {
                       }}
                     />
                   </div>
-                  <p style={{ color: "#a78bfa" }}>{planProgress}%</p>
+                  <p style={{ color: "#a78bfa", fontSize: 14 }}>{planProgress}%</p>
                   <p style={{ fontSize: 12, color: "#666", marginTop: 8 }}>
                     {planProgress < 30
                       ? "正在分析训练偏好..."
@@ -1195,7 +1200,7 @@ export default function App() {
                 {errorMsg && <div className="error-line">{errorMsg}</div>}
                 {planGenerating ? (
                   <div style={{ padding: "40px 20px", textAlign: "center" }}>
-                    <p style={{ marginBottom: 16 }}>🤖 AI 正在生成你的专属计划...</p>
+                    <p style={{ marginBottom: 16, fontSize: 16 }}>🤖 AI 正在生成你的专属计划...</p>
                     <div style={{ background: "#2a2a3d", borderRadius: 8, height: 12, margin: "16px 0" }}>
                       <div
                         style={{
@@ -1207,7 +1212,7 @@ export default function App() {
                         }}
                       />
                     </div>
-                    <p style={{ color: "#a78bfa" }}>{planProgress}%</p>
+                    <p style={{ color: "#a78bfa", fontSize: 14 }}>{planProgress}%</p>
                     <p style={{ fontSize: 12, color: "#666", marginTop: 8 }}>
                       {planProgress < 30
                         ? "正在分析训练偏好..."
