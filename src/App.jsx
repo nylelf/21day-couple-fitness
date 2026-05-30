@@ -45,14 +45,6 @@ function isStoredAiDayPlan(plan) {
   if (!plan || typeof plan !== "object") return false;
   if (plan.pending) return false;
   if (!Array.isArray(plan.workouts) || plan.workouts.length === 0) return false;
-  // 旧 fallback 计划的 habits 是固定4条英文，AI 计划的 habits 是中文个性化内容
-  // 用第一条 habit 判断：如果包含 "Protein Target" 或 "Water 2L" 则是旧模板
-  if (Array.isArray(plan.habits) && plan.habits.length > 0) {
-    const firstHabit = plan.habits[0] || "";
-    if (firstHabit.includes("Protein Target") || firstHabit.includes("Water 2L")) {
-      return false;
-    }
-  }
   return true;
 }
 
