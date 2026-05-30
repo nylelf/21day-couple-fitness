@@ -1,4 +1,4 @@
-const MODEL = "claude-sonnet-4-6";
+const MODEL = "claude-haiku-4-5-20251001";
 const DAYS = 21;
 
 const FITNESS_LEVEL_LABELS = {
