@@ -103,6 +103,26 @@ function buildUserPrompt({ role, preferenceProfile, challengeStartDate }) {
   const otherActivities = profile.otherActivities?.trim() || "无";
   const healthNotes = profile.healthNotes?.trim() || "无";
 
+  const activityDays = [];
+  if (otherActivities && otherActivities !== "无") {
+    const weekdayMap = { "周一": 1, "周二": 2, "周三": 3, "周四": 4, "周五": 5, "周六": 6, "周日": 0, "周天": 0 };
+    const startD = challengeStartDate ? parseDateOnly(challengeStartDate) : new Date();
+    for (let day = 1; day <= 21; day += 1) {
+      const d = new Date(startD);
+      d.setDate(startD.getDate() + day - 1);
+      const weekday = d.getDay();
+      for (const [name, val] of Object.entries(weekdayMap)) {
+        if (otherActivities.includes(name) && weekday === val) {
+          activityDays.push({ day, activity: otherActivities });
+        }
+      }
+    }
+  }
+
+  const activityInfo = activityDays.length > 0
+    ? `\n【其他运动日】以下天数已有其他运动，必须只安排15分钟轻度拉伸，title注明具体运动名称，不安排正式训练：\n${activityDays.map((d) => `第${d.day}天`).join("、")}`
+    : "";
+
   let periodInfo = "";
   if (role === "female" && profile.lastPeriodDate) {
     const adjustments = getPeriodAdjustmentDays(
@@ -132,6 +152,7 @@ function buildUserPrompt({ role, preferenceProfile, challengeStartDate }) {
 【特殊安排】
 - 每周其他运动：${otherActivities}（这些运动日当天只安排15分钟拉伸恢复，不安排正式训练，title注明"运动日恢复"）
 - 身体状况备注：${healthNotes}（有伤病或特殊情况的动作必须规避或替换）
+${activityInfo}
 
 ${periodInfo}
 
@@ -142,6 +163,16 @@ ${periodInfo}
 - 目标是增肌：多安排孤立动作，休息时间长（75-90s）
 - 目标是臀腿增长：重点安排深蹲、硬拉、臀推类动作
 - 每周其他运动日：当天计划必须是轻度恢复，不能有高强度训练
+
+【强制执行规则，不可忽略】
+- 器材是"仅徒手"：21天内绝对不能出现哑铃、杠铃、器械类动作
+- 器材是"家里有哑铃/弹力带"：只能用哑铃和弹力带，不能出现健身房器械
+- 器材是"健身房"：可以用所有器械
+- 时间是30分钟：每天最多3个动作，每组休息45秒以内
+- 时间是60分钟：每天4-5个动作
+- 时间是90分钟以上：每天5-6个动作，可加有氧
+- 训练水平新手：每个动作note里必须写动作要领，组数≤3组
+- 训练水平高级：组数4-5组，可安排复合超级组
 
 计划要求：
 1. 第 1-7 天：基础适应期（动作规范、中等偏低强度）
