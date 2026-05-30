@@ -1,7 +1,8 @@
 import { DAYS } from "./constants";
 import { dayKey } from "./challenge";
 import { getBasePlan } from "./plans";
-import { normalizePreferenceProfile } from "./preferenceProfile";
+import { normalizePreferenceProfile, createDefaultPreferenceProfileForRole } from "./preferenceProfile";
+import { applyProfileToPlan } from "../lib/planPersonalization.js";
 import {
   buildWeekReview,
   formatPriorPlansForPrompt,
@@ -57,29 +58,29 @@ export function buildAllPendingPlans() {
   return plans;
 }
 
-function buildFallbackPlansForRange(role, challengeStartDate, dayStart, dayEnd) {
+function buildFallbackPlansForRange(role, challengeStartDate, dayStart, dayEnd, preferenceProfile) {
   const plans = {};
   for (let day = dayStart; day <= dayEnd; day += 1) {
-    plans[dayKey(day)] = getBasePlan(role, day, challengeStartDate);
+    plans[dayKey(day)] = getBasePlan(role, day, challengeStartDate, preferenceProfile);
   }
   return plans;
 }
 
-function fillMissingPlanDaysInRange(plans, role, challengeStartDate, dayStart, dayEnd) {
+function fillMissingPlanDaysInRange(plans, role, challengeStartDate, dayStart, dayEnd, preferenceProfile) {
   const filled = { ...(plans || {}) };
   for (let day = dayStart; day <= dayEnd; day += 1) {
     const key = dayKey(day);
     if (!isStoredAiDayPlan(filled[key])) {
-      filled[key] = getBasePlan(role, day, challengeStartDate);
+      filled[key] = getBasePlan(role, day, challengeStartDate, preferenceProfile);
     }
   }
   return filled;
 }
 
-function mergeWeekOnePlans(role, challengeStartDate, chunkPlans, usedFallback) {
+function mergeWeekOnePlans(role, challengeStartDate, chunkPlans, usedFallback, preferenceProfile) {
   const weekOne = usedFallback
-    ? buildFallbackPlansForRange(role, challengeStartDate, 1, 7)
-    : fillMissingPlanDaysInRange(chunkPlans, role, challengeStartDate, 1, 7);
+    ? buildFallbackPlansForRange(role, challengeStartDate, 1, 7, preferenceProfile)
+    : fillMissingPlanDaysInRange(chunkPlans, role, challengeStartDate, 1, 7, preferenceProfile);
   return { ...buildPendingPlansFromDay(8), ...weekOne };
 }
 
@@ -113,7 +114,15 @@ async function requestGeneratedPlanChunk(
   if (!isStoredAiDayPlan(data.plans[dayKey(dayStart)])) {
     throw new Error(`第 ${dayStart}–${dayEnd} 天计划不完整`);
   }
-  return data.plans;
+  const normalizedProfile = normalizePreferenceProfile(preferenceProfile, "", role);
+  const shaped = {};
+  for (let day = dayStart; day <= dayEnd; day += 1) {
+    const key = dayKey(day);
+    if (data.plans[key]) {
+      shaped[key] = applyProfileToPlan(data.plans[key], normalizedProfile, role);
+    }
+  }
+  return shaped;
 }
 
 export async function generatePlanChunkForRole(challenge, role, chunk) {
@@ -141,12 +150,18 @@ export async function generatePlanChunkForRole(challenge, role, chunk) {
       iterativeContext
     );
     return {
-      plans: fillMissingPlanDaysInRange(plans, role, challenge.challengeStartDate, chunk.start, chunk.end),
+      plans: fillMissingPlanDaysInRange(plans, role, challenge.challengeStartDate, chunk.start, chunk.end, preferenceProfile),
       usedFallback: false,
     };
   } catch {
     return {
-      plans: buildFallbackPlansForRange(role, challenge.challengeStartDate, chunk.start, chunk.end),
+      plans: buildFallbackPlansForRange(
+        role,
+        challenge.challengeStartDate,
+        chunk.start,
+        chunk.end,
+        preferenceProfile
+      ),
       usedFallback: true,
     };
   }
@@ -166,12 +181,12 @@ export async function resolveRolePlansInitial(role, preferenceProfile, challenge
       chunk.start,
       chunk.end
     );
-    const merged = mergeWeekOnePlans(role, challengeStartDate, chunkPlans, false);
+    const merged = mergeWeekOnePlans(role, challengeStartDate, chunkPlans, false, preferenceProfile);
     onProgressUpdate?.(100, chunk, { ...merged });
     await onChunkComplete?.(chunk, chunkPlans, { ...merged });
     return { plans: merged, usedFallback: false, generatedThrough: 7 };
   } catch {
-    const fallback = mergeWeekOnePlans(role, challengeStartDate, null, true);
+    const fallback = mergeWeekOnePlans(role, challengeStartDate, null, true, preferenceProfile);
     onProgressUpdate?.(100, chunk, { ...fallback });
     await onChunkComplete?.(chunk, fallback, { ...fallback });
     return { plans: fallback, usedFallback: true, generatedThrough: 7 };
@@ -183,7 +198,7 @@ export async function resolveRolePlans(role, preferenceProfile, challengeStartDa
     return await resolveRolePlansInitial(role, preferenceProfile, challengeStartDate, callbacks);
   } catch {
     return {
-      plans: mergeWeekOnePlans(role, challengeStartDate, null, true),
+      plans: mergeWeekOnePlans(role, challengeStartDate, null, true, preferenceProfile),
       usedFallback: true,
       generatedThrough: 7,
     };

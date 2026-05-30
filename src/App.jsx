@@ -21,6 +21,7 @@ import { getPlanMealItems, usesLegacyRecoveryHabits } from "./mealPlan";
 import { formatPlanTitle, formatRestTime, formatWorkoutName, formatWorkoutVolume } from "./formatLabels";
 import {
   createDefaultPreferenceProfile,
+  createDefaultPreferenceProfileForRole,
   DEFAULT_PREFERENCE_PROFILE,
   getGoalLabels,
   normalizePreferenceProfile,
@@ -74,7 +75,9 @@ export default function App() {
 
   const [createRole, setCreateRole] = useState(ROLE_MALE);
   const [createNickname, setCreateNickname] = useState("");
-  const [createPreferenceProfile, setCreatePreferenceProfile] = useState(createDefaultPreferenceProfile());
+  const [createPreferenceProfile, setCreatePreferenceProfile] = useState(
+    createDefaultPreferenceProfileForRole(ROLE_MALE)
+  );
   const [createStartDate, setCreateStartDate] = useState(formatDateOnly(new Date()));
   const [joinCode, setJoinCode] = useState("");
   const [joinRole, setJoinRole] = useState(ROLE_FEMALE);
@@ -1014,7 +1017,7 @@ export default function App() {
                 </div>
                 <div className="icon-pill"><Heart size={22} /></div>
               </div>
-              <Button className="primary-btn full-btn" onClick={() => { setScreen("create"); setCreateRole(ROLE_MALE); setCreateStartDate(formatDateOnly(new Date())); setCreatePreferenceProfile(createDefaultPreferenceProfile()); }}>
+              <Button className="primary-btn full-btn" onClick={() => { setScreen("create"); setCreateRole(ROLE_MALE); setCreateStartDate(formatDateOnly(new Date())); setCreatePreferenceProfile(createDefaultPreferenceProfileForRole(ROLE_MALE)); }}>
                 <Users size={16} />Create Couple Challenge
               </Button>
               {Boolean(myRole && inviteCode) ? (
@@ -1045,7 +1048,7 @@ export default function App() {
                   className={`role-btn ${createRole === ROLE_MALE ? "is-active" : ""}`}
                   onClick={() => {
                     setCreateRole(ROLE_MALE);
-                    setCreatePreferenceProfile((prev) => normalizePreferenceProfile(prev, "", ROLE_MALE));
+                    setCreatePreferenceProfile(createDefaultPreferenceProfileForRole(ROLE_MALE));
                   }}
                 >
                   ♂ 男生
@@ -1054,7 +1057,7 @@ export default function App() {
                   className={`role-btn ${createRole === ROLE_FEMALE ? "is-active" : ""}`}
                   onClick={() => {
                     setCreateRole(ROLE_FEMALE);
-                    setCreatePreferenceProfile((prev) => normalizePreferenceProfile(prev, "", ROLE_FEMALE));
+                    setCreatePreferenceProfile(createDefaultPreferenceProfileForRole(ROLE_FEMALE));
                   }}
                 >
                   ♀ 女生

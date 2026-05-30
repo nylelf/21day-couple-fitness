@@ -452,3 +452,20 @@ export function createDefaultPreferenceProfile() {
 
 
 
+export function createDefaultPreferenceProfileForRole(role) {
+  if (role === "female") {
+    return {
+      ...DEFAULT_PREFERENCE_PROFILE,
+      goals: ["glute_shape"],
+      trainingSplit: "push_pull_legs",
+    };
+  }
+  return {
+    ...DEFAULT_PREFERENCE_PROFILE,
+    goals: ["muscle_gain"],
+    trainingSplit: "push_pull_legs",
+  };
+}
+
+
+

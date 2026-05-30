@@ -5,6 +5,12 @@ import { buildFallbackMeals, formatMealsAsHabits } from "./mealPlan";
 import { formatChinesePrimary } from "./formatLabels";
 import { getDefaultGoalForRole, getGoalLabels } from "./preferenceProfile";
 import { parseDateOnly, addDays, formatDateOnly } from "./dateUtils";
+import {
+  applyProfileToPlan,
+  getSplitDayLabel,
+  getTemplateKeyForDay,
+} from "../lib/planPersonalization.js";
+import { normalizePreferenceProfile } from "./preferenceProfile";
 
 const maleTemplates = {
   chestTriA: {
@@ -179,11 +185,15 @@ function getWeekdayIndex(date) {
   return jsDay === 0 ? 6 : jsDay - 1; // 0=Mon ... 6=Sun
 }
 
-function buildPlanItem(day, key, templates) {
+function buildPlanItem(day, key, templates, profile, role) {
   const base = templates[key];
+  if (!base) {
+    return buildPlanItem(day, role === ROLE_FEMALE ? "activeRecovery" : "recoveryCore", templates, profile, role);
+  }
   const meals = buildFallbackMeals(key, day);
-  return {
-    title: formatChinesePrimary(`Day ${day} · ${base.title}`),
+  const splitLabel = getSplitDayLabel(role, profile?.trainingSplit, day);
+  const plan = {
+    title: formatChinesePrimary(`Day ${day} · ${splitLabel} · ${base.title}`),
     workouts: base.workouts.map((item) => ({
       ...item,
       name: formatChinesePrimary(item.name),
@@ -191,24 +201,35 @@ function buildPlanItem(day, key, templates) {
     meals,
     habits: formatMealsAsHabits(meals),
   };
+  return applyProfileToPlan(plan, profile, role);
 }
 
-function buildDynamicPlan(role, day, challengeStartDate) {
+function buildDynamicPlan(role, day, challengeStartDate, preferenceProfile = null) {
+  const profile = preferenceProfile
+    ? normalizePreferenceProfile(preferenceProfile, "", role)
+    : null;
   const targetDate = getDateForDay(challengeStartDate, day);
   const weekday = getWeekdayIndex(targetDate);
+  const templates = role === ROLE_MALE ? maleTemplates : femaleTemplates;
+
+  if (profile?.trainingSplit) {
+    const key = getTemplateKeyForDay(role, profile.trainingSplit, weekday);
+    return buildPlanItem(day, key, templates, profile, role);
+  }
+
   if (role === ROLE_MALE) {
     const key = maleWeekdayCycle[weekday];
-    return buildPlanItem(day, key, maleTemplates);
+    return buildPlanItem(day, key, templates, profile, role);
   }
   const key = femaleWeekdayCycle[weekday];
-  return buildPlanItem(day, key, femaleTemplates);
+  return buildPlanItem(day, key, templates, profile, role);
 }
 
 export function getDefaultGoal(role) {
   return getGoalLabels(role, [getDefaultGoalForRole(role)]);
 }
 
-export function getBasePlan(role, day, challengeStartDate) {
+export function getBasePlan(role, day, challengeStartDate, preferenceProfile = null) {
   const safeDay = Math.min(21, Math.max(1, day));
-  return buildDynamicPlan(role, safeDay, challengeStartDate);
+  return buildDynamicPlan(role, safeDay, challengeStartDate, preferenceProfile);
 }

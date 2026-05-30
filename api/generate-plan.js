@@ -1,3 +1,9 @@
+import {
+  buildPersonalizationFingerprint,
+  buildPersonalizationPromptBlock,
+  detectActivityDays,
+} from "../lib/planPersonalization.js";
+
 const MODEL = "claude-haiku-4-5-20251001";
 const DAYS = 21;
 const MAX_WORKOUTS_PER_DAY = 4;
@@ -93,6 +99,7 @@ const TRAINING_SPLIT_GUIDE = {
 
 const SYSTEM_PROMPT = `你必须用中文回复，所有内容包括动作名称、note、meals、title都必须是中文。动作名称与每日 title 格式必须是：中文名（English），英文只能放在括号内，禁止 English（中文）这种反写格式。禁止输出纯英文句子。
 你是一位专业健身教练，擅长为情侣制定科学的个性化训练计划与一日六餐饮食方案。
+【核心原则】每位学员的配置不同，输出的计划必须在：训练分化日程、动作选择、器材类型、每日动作数量、组次数与休息上明显不同；禁止给所有人相同的「推拉腿」通用模板。
 请严格只返回 JSON，不要任何解释、标题或 markdown 格式。
 title 示例："推日 · 胸+三头（Push Day · Chest + Triceps）"、"篮球日（Basketball Day）"、"第8天 · 拉日 · 背部（Pull Day）"。
 动作名称示例："杠铃卧推（Barbell Bench Press）"、"篮球（Basketball）"。`;
@@ -231,6 +238,13 @@ function buildUserPrompt({ role, preferenceProfile, challengeStartDate, dayStart
   }
   const dayRangeLabel = dayStart === dayEnd ? `day-${dayStart}` : `day-${dayStart} 到 day-${dayEnd}`;
   const femaleGluteLegGuide = buildFemaleGluteLegGuide(role, profile.fitnessLevel || "beginner");
+  const personalizationBlock = buildPersonalizationPromptBlock(
+    profile,
+    role,
+    challengeStartDate,
+    dayStart,
+    dayEnd
+  );
 
   const iterativeSection =
     dayStart > 1 && iterativeContext?.weekReviewText
@@ -254,24 +268,10 @@ ${iterativeContext.priorPlansText || ""}
 `
         : "";
 
-  const activityDays = [];
-  if (otherActivities && otherActivities !== "无") {
-    const weekdayMap = { "周一": 1, "周二": 2, "周三": 3, "周四": 4, "周五": 5, "周六": 6, "周日": 0, "周天": 0 };
-    const startD = challengeStartDate ? parseDateOnly(challengeStartDate) : new Date();
-    for (let day = 1; day <= 21; day += 1) {
-      const d = new Date(startD);
-      d.setDate(startD.getDate() + day - 1);
-      const weekday = d.getDay();
-      for (const [name, val] of Object.entries(weekdayMap)) {
-        if (otherActivities.includes(name) && weekday === val) {
-          activityDays.push({ day, activity: otherActivities });
-        }
-      }
-    }
-  }
+  const activityDays = detectActivityDays(otherActivities, challengeStartDate, DAYS);
 
   const activityInfo = activityDays.length > 0
-    ? `\n【其他运动日】以下天数已有其他运动，必须只安排15分钟轻度拉伸，title注明具体运动名称，不安排正式训练：\n${activityDays.map((d) => `第${d.day}天`).join("、")}`
+    ? `\n【其他运动日 — 强制执行】以下天数只能 15 分钟轻度拉伸，title 注明运动名称，workouts 最多 1-2 个拉伸动作：\n${activityDays.map((d) => `第${d.day}天（${d.label}）`).join("、")}`
     : "";
 
   let periodInfo = "";
@@ -289,13 +289,15 @@ ${iterativeContext.priorPlansText || ""}
     }
   }
 
-  return `请为以下用户生成 21 天挑战中 **${dayRangeLabel}** 的训练计划（共 ${dayKeys.length} 天，键名必须是 ${dayKeys.join("、")}）。
+  return `${personalizationBlock}
+
+请为以下用户生成 21 天挑战中 **${dayRangeLabel}** 的训练计划（共 ${dayKeys.length} 天，键名必须是 ${dayKeys.join("、")}）。
 
 这是完整 21 天计划的分段生成（第 ${dayStart}–${dayEnd} 天）。必须与前后分段在分化顺序、强度递进上保持连贯。
 
-请严格根据以下学员信息制定个性化训练计划，每一项都必须体现在计划中：
+请严格根据上方【个人配置锁定】与下列学员信息制定计划（二者冲突时以【个人配置锁定】为准）：
 
-【基本信息】
+【基本信息摘要】
 - 性别：${gender}
 - 训练等级：${level}（${levelGuide}）
 - 训练目标：${goalText}（${goalGuide}；用户可能选择了多个目标，计划需综合兼顾，不能只顾其一）
@@ -567,6 +569,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: CHUNK_MAX_TOKENS,
+        temperature: 0.7,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userPrompt }],
       }),
@@ -590,7 +593,15 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "AI 返回的计划格式不完整" });
     }
 
-    return res.status(200).json({ plans });
+    return res.status(200).json({
+      plans,
+      meta: {
+        source: "ai",
+        fingerprint: buildPersonalizationFingerprint(preferenceProfile, role),
+        dayStart,
+        dayEnd,
+      },
+    });
   } catch (err) {
     console.error("generate-plan API error:", err);
     return res.status(500).json({ error: err.message || "生成计划时出错，请稍后重试" });
