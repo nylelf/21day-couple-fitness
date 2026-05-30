@@ -86,9 +86,7 @@ function dayKey(day) {
 
 function calcCurrentDay(challengeStartDate) {
   const start = parseDateOnly(challengeStartDate);
-  const today = new Date();
-  start.setHours(0, 0, 0, 0);
-  today.setHours(0, 0, 0, 0);
+  const today = parseDateOnly(formatDateOnly(new Date()));
   const diff = Math.floor((today.getTime() - start.getTime()) / 86400000);
   return Math.min(21, Math.max(1, diff + 1));
 }
@@ -299,7 +297,7 @@ function normalizeCheckinEntry(entry) {
 
 function createChallenge(inviteCode, myRole, nickname, challengeStartDate, preferences = "", preferenceProfile = DEFAULT_PREFERENCE_PROFILE) {
   const now = new Date().toISOString();
-  const startDate = challengeStartDate || now.slice(0, 10);
+  const startDate = challengeStartDate || formatDateOnly(new Date());
   const normalizedProfile = normalizePreferenceProfile(preferenceProfile, preferences, myRole);
   const base = normalizeChallenge({
     inviteCode,
@@ -778,14 +776,13 @@ export default function App() {
     }
 
     const existing = joinRemoteChallenge.users?.[joinRole]?.preferenceProfile;
-    setJoinPreferenceProfile(
-      existing
-        ? { ...normalizePreferenceProfile(existing, "", joinRole) }
-        : createDefaultPreferenceProfile()
-    );
+    const preferenceProfile = existing
+      ? normalizePreferenceProfile(existing, "", joinRole)
+      : createDefaultPreferenceProfile();
+    setJoinPreferenceProfile({ ...preferenceProfile });
     setJoinIsReturningUpdate(true);
     setJoinStep("preferences");
-    await handleJoinCompleteWithPreferences();
+    await handleJoinCompleteWithPreferences(preferenceProfile);
   }
 
   function handleJoinStartUpdatePreferences() {
@@ -805,7 +802,7 @@ export default function App() {
     return requestGeneratedPlan(joinRole, preferenceProfile, challengeStartDate);
   }
 
-  async function handleJoinCompleteWithPreferences() {
+  async function handleJoinCompleteWithPreferences(preferenceProfileOverride) {
     resetJoinCreateErrors();
     const code = joinCode.trim().toUpperCase();
     const nickname = joinNickname.trim();
@@ -827,7 +824,11 @@ export default function App() {
     }
     const remote = normalizeChallenge(latestResult.data.data);
 
-    const preferenceProfile = normalizePreferenceProfile(joinPreferenceProfile, "", joinRole);
+    const preferenceProfile = normalizePreferenceProfile(
+      preferenceProfileOverride ?? joinPreferenceProfile,
+      "",
+      joinRole
+    );
     const preferenceSummary = profileSummary(preferenceProfile, joinRole);
 
     // 新用户加入 / 老用户更新偏好：调用 /api/generate-plan
@@ -840,15 +841,18 @@ export default function App() {
     let rolePlans;
     let usedFallback = false;
     try {
-      rolePlans = await generateJoinRolePlans(remote.challengeStartDate);
-    } catch (err) {
-      console.error("generate-plan failed on join:", err);
-      rolePlans = buildFallbackPlans(joinRole, remote.challengeStartDate);
-      usedFallback = true;
+      const result = await resolveRolePlans(joinRole, preferenceProfile, remote.challengeStartDate);
+      rolePlans = result.plans;
+      usedFallback = result.usedFallback;
     } finally {
       clearInterval(_progressTimer);
       setPlanProgress(100);
       setPlanGenerating(false);
+    }
+
+    if (!isStoredAiDayPlan(rolePlans?.["day-1"])) {
+      setErrorMsg("计划生成失败，请稍后重试");
+      return;
     }
 
     const updated = {
