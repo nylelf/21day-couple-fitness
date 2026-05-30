@@ -2,17 +2,11 @@ import {
   CYCLE_LENGTHS,
   EQUIPMENT_OPTIONS,
   FITNESS_LEVELS,
-  GOALS,
+  getGoalsForRole,
   SESSION_DURATIONS,
+  TRAINING_SPLITS,
 } from "./preferenceProfile";
-
-function Button({ className = "", children, ...props }) {
-  return (
-    <button type="button" className={`app-btn ${className}`} {...props}>
-      {children}
-    </button>
-  );
-}
+import { Button } from "./components/ui";
 
 function OptionGroup({ label, options, value, onChange }) {
   return (
@@ -33,6 +27,96 @@ function OptionGroup({ label, options, value, onChange }) {
   );
 }
 
+function MultiOptionGroup({ label, hint, options, values, onChange }) {
+  const selected = Array.isArray(values) ? values : values ? [values] : [];
+
+  function toggle(value) {
+    if (selected.includes(value)) {
+      if (selected.length === 1) return;
+      onChange(selected.filter((item) => item !== value));
+      return;
+    }
+    onChange([...selected, value]);
+  }
+
+  return (
+    <div className="pref-field">
+      <div className="pref-field-label">{label}</div>
+      {hint ? <div className="pref-field-hint">{hint}</div> : null}
+      <div className="role-toggle-grid pref-option-grid">
+        {options.map((option) => (
+          <Button
+            key={String(option.value)}
+            className={`role-btn ${selected.includes(option.value) ? "is-active" : ""}`}
+            onClick={() => toggle(option.value)}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TrainingLevelPicker({ value, onChange }) {
+  const activeValue = FITNESS_LEVELS.some((item) => item.value === value) ? value : "beginner";
+  const activeLevel = FITNESS_LEVELS.find((item) => item.value === activeValue);
+
+  return (
+    <div className="pref-field">
+      <div className="pref-field-label">训练等级</div>
+      <div className="pref-level-list">
+        {FITNESS_LEVELS.map((level) => {
+          const isActive = activeValue === level.value;
+          return (
+            <button
+              key={level.value}
+              type="button"
+              className={`pref-level-card ${isActive ? "is-active" : ""}`}
+              onClick={() => onChange(level.value)}
+            >
+              <div className="pref-level-head">
+                <span className="pref-level-tier">{level.tier}</span>
+                <span className="pref-level-name">{level.label}</span>
+                <span className="pref-level-duration">{level.duration}</span>
+              </div>
+              {isActive && (
+                <div className="pref-level-body">
+                  {level.traits.length > 0 && (
+                    <div className="pref-level-block">
+                      <div className="pref-level-block-title">特点</div>
+                      <ul className="pref-level-tags">
+                        {level.traits.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {level.recommendations.length > 0 && (
+                    <div className="pref-level-block">
+                      <div className="pref-level-block-title">推荐</div>
+                      <ul className="pref-level-tags">
+                        {level.recommendations.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {activeLevel && (
+        <div className="pref-level-summary">
+          已选：{activeLevel.tier} {activeLevel.label} · 推荐 {activeLevel.recommendations.join("、")}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PreferenceForm({ role, value, onChange }) {
   function patch(fields) {
     onChange({ ...value, ...fields });
@@ -40,18 +124,17 @@ export default function PreferenceForm({ role, value, onChange }) {
 
   return (
     <div className="pref-form section-stack">
-      <OptionGroup
-        label="训练年限"
-        options={FITNESS_LEVELS}
+      <TrainingLevelPicker
         value={value.fitnessLevel}
         onChange={(fitnessLevel) => patch({ fitnessLevel })}
       />
 
-      <OptionGroup
-        label="训练目标"
-        options={GOALS}
-        value={value.goal}
-        onChange={(goal) => patch({ goal })}
+      <MultiOptionGroup
+        label={role === "female" ? "训练目标（女生，可多选）" : "训练目标（男生，可多选）"}
+        hint="至少选择 1 项，再次点击可取消"
+        options={getGoalsForRole(role)}
+        values={value.goals || value.goal || []}
+        onChange={(goals) => patch({ goals })}
       />
 
       <OptionGroup
@@ -66,6 +149,13 @@ export default function PreferenceForm({ role, value, onChange }) {
         options={SESSION_DURATIONS}
         value={value.sessionDuration}
         onChange={(sessionDuration) => patch({ sessionDuration })}
+      />
+
+      <OptionGroup
+        label="训练部位分化"
+        options={TRAINING_SPLITS}
+        value={value.trainingSplit || "push_pull_legs"}
+        onChange={(trainingSplit) => patch({ trainingSplit })}
       />
 
       <div className="pref-field">

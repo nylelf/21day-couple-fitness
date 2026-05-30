@@ -15,341 +15,47 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
-import { getBasePlan, getDefaultGoal } from "./plans";
+import { getDefaultGoal } from "./plans";
 import PreferenceForm from "./PreferenceForm";
+import { getPlanMealItems, usesLegacyRecoveryHabits } from "./mealPlan";
+import { formatPlanTitle, formatRestTime, formatWorkoutName, formatWorkoutVolume } from "./formatLabels";
 import {
   createDefaultPreferenceProfile,
   DEFAULT_PREFERENCE_PROFILE,
+  getGoalLabels,
   normalizePreferenceProfile,
   profileSummary,
 } from "./preferenceProfile";
 import { fetchChallengeByCode, saveChallengeToCloud, supabase } from "./supabaseClient";
 import { clearLocalSession, getStoredSessionValues, readLocalSession, writeLocalSession } from "./sessionStorage";
-
-const DAYS = 21;
-const ROLE_MALE = "male";
-const ROLE_FEMALE = "female";
-
-const PLAN_PENDING_PLACEHOLDER = {
-  pending: true,
-  title: "等待对方加入后生成专属计划",
-  workouts: [],
-  habits: [],
-};
-
-function createPendingPlan() {
-  return { ...PLAN_PENDING_PLACEHOLDER };
-}
-
-function isStoredAiDayPlan(plan) {
-  if (!plan || typeof plan !== "object") return false;
-  if (plan.pending) return false;
-  if (!Array.isArray(plan.workouts) || plan.workouts.length === 0) return false;
-  return true;
-}
-
-function Card({ className = "", children }) {
-  return <div className={className}>{children}</div>;
-}
-
-function CardContent({ className = "", children }) {
-  return <div className={className}>{children}</div>;
-}
-
-function Button({ className = "", children, ...props }) {
-  return (
-    <button className={`app-btn ${className}`} {...props}>
-      {children}
-    </button>
-  );
-}
-
-function roleLabel(role) {
-  return role === ROLE_MALE ? "♂ 男生" : "♀ 女生";
-}
-
-function oppositeRole(role) {
-  return role === ROLE_MALE ? ROLE_FEMALE : ROLE_MALE;
-}
-
-function dayKey(day) {
-  return `day-${day}`;
-}
-
-function calcCurrentDay(challengeStartDate) {
-  const start = parseDateOnly(challengeStartDate);
-  const today = parseDateOnly(formatDateOnly(new Date()));
-  const diff = Math.floor((today.getTime() - start.getTime()) / 86400000);
-  return Math.min(21, Math.max(1, diff + 1));
-}
-
-function parseDateOnly(dateValue) {
-  if (dateValue instanceof Date) {
-    return new Date(dateValue.getFullYear(), dateValue.getMonth(), dateValue.getDate());
-  }
-  if (typeof dateValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
-    const [y, m, d] = dateValue.split("-").map(Number);
-    return new Date(y, m - 1, d);
-  }
-  const parsed = new Date(dateValue);
-  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
-}
-
-function formatDateOnly(dateValue) {
-  const d = parseDateOnly(dateValue);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function getDateKey(date) {
-  return formatDateOnly(date);
-}
-
-function addDays(dateValue, days) {
-  const d = parseDateOnly(dateValue);
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-function getChallengeDateForDay(challengeStartDate, day) {
-  return addDays(challengeStartDate, day - 1);
-}
-
-function dateDiffDays(fromDate, toDate) {
-  const start = parseDateOnly(fromDate).getTime();
-  const end = parseDateOnly(toDate).getTime();
-  return Math.floor((end - start) / 86400000);
-}
-
-function formatMonthTitle(date) {
-  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(date);
-}
-
-function normalizePreferenceText(text) {
-  return (text || "").trim();
-}
-
-function reduceSetsValue(sets) {
-  if (typeof sets === "number") return Math.max(1, sets - 1);
-  return sets;
-}
-
-function personalizePlan(plan, preferenceText, preferenceProfile = DEFAULT_PREFERENCE_PROFILE, role = "") {
-  const normalizedProfile = normalizePreferenceProfile(preferenceProfile, preferenceText, role);
-  const text = `${normalizePreferenceText(preferenceText)} ${normalizedProfile.healthNotes} ${normalizedProfile.otherActivities}`.toLowerCase();
-  const hasStructuredPrefs =
-    normalizedProfile.fitnessLevel !== DEFAULT_PREFERENCE_PROFILE.fitnessLevel ||
-    normalizedProfile.goal !== DEFAULT_PREFERENCE_PROFILE.goal ||
-    normalizedProfile.equipment !== DEFAULT_PREFERENCE_PROFILE.equipment ||
-    normalizedProfile.sessionDuration !== DEFAULT_PREFERENCE_PROFILE.sessionDuration ||
-    normalizedProfile.otherActivities ||
-    normalizedProfile.healthNotes;
-
-  if (!text.trim() && !hasStructuredPrefs) return plan;
-
-  let workouts = [...(plan.workouts || [])];
-  let habits = [...(plan.habits || [])];
-  const tags = [];
-
-  if (normalizedProfile.sessionDuration <= 30 || /(30分钟|30 分钟|时间少|忙|quick)/.test(text)) {
-    workouts = workouts.slice(0, 4);
-    habits.push("Quick Session（30分钟内完成）");
-    tags.push("快速版");
-  }
-
-  if (
-    ["beginner", "novice", "recovery"].includes(normalizedProfile.fitnessLevel) ||
-    /(新手|初学|beginner)/.test(text)
-  ) {
-    workouts = workouts.map((item) => ({ ...item, sets: reduceSetsValue(item.sets), note: `${item.note} Beginner-friendly: keep 2 reps in reserve.` }));
-    tags.push("新手版");
-  }
-
-  const needsKneeCare =
-    normalizedProfile.goal === "rehabilitation" ||
-    normalizedProfile.fitnessLevel === "recovery" ||
-    /(膝|knee)/.test(text);
-  if (needsKneeCare) {
-    workouts = workouts.map((item) =>
-      /(深蹲|腿举|跳|squat|leg press|jump)/i.test(item.name)
-        ? { ...item, note: `${item.note} Knee-care: reduce load 10-20% and keep pain-free range.` }
-        : item
-    );
-    habits.push("Knee Care（膝盖友好：训练后冰敷/拉伸）");
-    tags.push("膝盖友好");
-  }
-
-  const needsBackCare =
-    normalizedProfile.goal === "rehabilitation" ||
-    normalizedProfile.fitnessLevel === "recovery" ||
-    /(腰|lower back|back pain|腰椎)/.test(text);
-  if (needsBackCare) {
-    workouts = workouts.map((item) =>
-      /(硬拉|deadlift|good morning)/i.test(item.name)
-        ? { ...item, note: `${item.note} Back-care: prioritize neutral spine and lighter load.` }
-        : item
-    );
-    habits.push("Back Care（下背恢复：核心激活+伸展）");
-    tags.push("腰背友好");
-  }
-
-  if (
-    normalizedProfile.equipment === "home" ||
-    normalizedProfile.equipment === "bodyweight" ||
-    /(家|home|dumbbell|弹力带|徒手)/.test(text)
-  ) {
-    workouts = workouts.map((item) => ({
-      ...item,
-      note: `${item.note} Home-option: dumbbell/band/bodyweight variation is acceptable.`,
-    }));
-    tags.push("居家可做");
-  }
-
-  return {
-    ...plan,
-    title: tags.length ? `${plan.title} · ${tags.join("/")}` : plan.title,
-    workouts,
-    habits,
-  };
-}
-
-function generateInviteCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let out = "";
-  for (let i = 0; i < 6; i += 1) {
-    out += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return out;
-}
-
-function normalizeChallenge(data) {
-  if (!data) return null;
-  const inviteCode = data.inviteCode || data.challengeId || "";
-  const challengeStartDate = data.challengeStartDate || formatDateOnly(new Date());
-  return {
-    inviteCode,
-    challengeStartDate,
-    users: {
-      male: {
-        name: data.users?.male?.name || "",
-        goal: data.users?.male?.goal || getDefaultGoal(ROLE_MALE),
-        preferenceProfile: normalizePreferenceProfile(data.users?.male?.preferenceProfile, data.users?.male?.preferences, ROLE_MALE),
-        preferences: normalizePreferenceText(
-          data.users?.male?.preferences ||
-            profileSummary(normalizePreferenceProfile(data.users?.male?.preferenceProfile, data.users?.male?.preferences, ROLE_MALE), ROLE_MALE)
-        ),
-        joinedAt: data.users?.male?.joinedAt || "",
-      },
-      female: {
-        name: data.users?.female?.name || "",
-        goal: data.users?.female?.goal || getDefaultGoal(ROLE_FEMALE),
-        preferenceProfile: normalizePreferenceProfile(data.users?.female?.preferenceProfile, data.users?.female?.preferences, ROLE_FEMALE),
-        preferences: normalizePreferenceText(
-          data.users?.female?.preferences ||
-            profileSummary(normalizePreferenceProfile(data.users?.female?.preferenceProfile, data.users?.female?.preferences, ROLE_FEMALE), ROLE_FEMALE)
-        ),
-        joinedAt: data.users?.female?.joinedAt || "",
-      },
-    },
-    plans: {
-      male: data.plans?.male || {},
-      female: data.plans?.female || {},
-    },
-    checkins: {
-      male: data.checkins?.male || {},
-      female: data.checkins?.female || {},
-    },
-    notes: {
-      male: data.notes?.male || {},
-      female: data.notes?.female || {},
-    },
-    messages: {
-      male: data.messages?.male || {},
-      female: data.messages?.female || {},
-    },
-    updatedAt: data.updatedAt || new Date().toISOString(),
-  };
-}
-
-function normalizeCheckinEntry(entry) {
-  if (!entry) return { workouts: {}, habits: {} };
-  if (entry.workouts || entry.habits) {
-    return {
-      workouts: entry.workouts || {},
-      habits: entry.habits || {},
-    };
-  }
-  return {
-    workouts: entry,
-    habits: {},
-  };
-}
-
-function createChallenge(inviteCode, myRole, nickname, challengeStartDate, preferences = "", preferenceProfile = DEFAULT_PREFERENCE_PROFILE) {
-  const now = new Date().toISOString();
-  const startDate = challengeStartDate || formatDateOnly(new Date());
-  const normalizedProfile = normalizePreferenceProfile(preferenceProfile, preferences, myRole);
-  const base = normalizeChallenge({
-    inviteCode,
-    challengeStartDate: startDate,
-    users: {
-      [myRole]: {
-        name: nickname.trim(),
-        goal: getDefaultGoal(myRole),
-        preferenceProfile: normalizedProfile,
-        preferences: normalizePreferenceText(preferences || profileSummary(normalizedProfile, myRole)),
-        joinedAt: now,
-      },
-    },
-  });
-  return { ...base, updatedAt: now };
-}
-
-function buildFallbackPlans(role, challengeStartDate) {
-  const plans = {};
-  for (let day = 1; day <= DAYS; day += 1) {
-    plans[dayKey(day)] = getBasePlan(role, day, challengeStartDate);
-  }
-  return plans;
-}
-
-async function requestGeneratedPlan(role, preferenceProfile, challengeStartDate) {
-  const response = await fetch("/api/generate-plan", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      role,
-      preferenceProfile: normalizePreferenceProfile(preferenceProfile, "", role),
-      challengeStartDate,
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "计划生成失败");
-  }
-  if (!data.plans || typeof data.plans !== "object") {
-    throw new Error("计划生成失败");
-  }
-  if (!isStoredAiDayPlan(data.plans["day-1"])) {
-    throw new Error("AI 返回的计划不完整");
-  }
-  return data.plans;
-}
-
-async function resolveRolePlans(role, preferenceProfile, challengeStartDate) {
-  try {
-    const plans = await requestGeneratedPlan(role, preferenceProfile, challengeStartDate);
-    return { plans, usedFallback: false };
-  } catch {
-    return {
-      plans: buildFallbackPlans(role, challengeStartDate),
-      usedFallback: true,
-    };
-  }
-}
-
+import { DAYS, ROLE_FEMALE, ROLE_MALE, oppositeRole, roleLabel } from "./constants";
+import {
+  calcCurrentDay,
+  dateDiffDays,
+  formatDateOnly,
+  formatMonthTitle,
+  getChallengeDateForDay,
+  getDateKey,
+  parseDateOnly,
+} from "./dateUtils";
+import {
+  buildCompletedPlanMeta,
+  createChallenge,
+  createEmptyPlanMeta,
+  dayKey,
+  generateInviteCode,
+  normalizeChallenge,
+  normalizeCheckinEntry,
+} from "./challenge";
+import {
+  buildAllPendingPlans,
+  buildPendingPlansFromDay,
+  createPendingPlan,
+  generatePlanChunkForRole,
+  resolveRolePlans,
+} from "./planGeneration";
+import { getNextChunkToGenerate, getPlanMetaForRole, isStoredAiDayPlan } from "./planMeta";
+import { Button, Card, CardContent } from "./components/ui";
 
 export default function App() {
   const session = readLocalSession();
@@ -387,8 +93,12 @@ export default function App() {
   const [messageDraft, setMessageDraft] = useState("");
   const [planGenerating, setPlanGenerating] = useState(false);
   const [planProgress, setPlanProgress] = useState(0);
+  const [planProgressLabel, setPlanProgressLabel] = useState("");
+  const [planBackgroundGenerating, setPlanBackgroundGenerating] = useState(false);
+  const [planBackgroundLabel, setPlanBackgroundLabel] = useState("");
   const [toastMsg, setToastMsg] = useState("");
   const toastTimerRef = useRef(null);
+  const autoGenInFlightRef = useRef(false);
 
   const currentDay = challenge ? calcCurrentDay(challenge.challengeStartDate) : 1;
   const hasStarted = challenge ? getDateKey(new Date()) >= getDateKey(challenge.challengeStartDate) : true;
@@ -400,8 +110,12 @@ export default function App() {
     const storedPlan = challenge?.plans?.[role]?.[key];
     if (isStoredAiDayPlan(storedPlan)) {
       return {
-        title: storedPlan.title || `Day ${day}`,
-        workouts: storedPlan.workouts,
+        title: formatPlanTitle(storedPlan.title || `Day ${day}`),
+        workouts: (storedPlan.workouts || []).map((item) => ({
+          ...item,
+          name: formatWorkoutName(item.name),
+        })),
+        meals: storedPlan.meals,
         habits: Array.isArray(storedPlan.habits) ? storedPlan.habits : [],
       };
     }
@@ -414,11 +128,12 @@ export default function App() {
 
   const checkin = normalizeCheckinEntry(challenge?.checkins?.[viewingRole]?.[dKey]);
   const checkedWorkouts = checkin.workouts || {};
+  const mealItems = useMemo(() => getPlanMealItems(selectedPlan), [selectedPlan]);
   const checkedHabits = checkin.habits || {};
   const noteText = challenge?.notes?.[viewingRole]?.[dKey] || "";
   const dayMessageText = challenge?.messages?.[viewingRole]?.[dKey] || "";
   const doneCount = Object.values(checkedWorkouts).filter(Boolean).length + Object.values(checkedHabits).filter(Boolean).length;
-  const totalCount = selectedPlan.workouts.length + selectedPlan.habits.length;
+  const totalCount = selectedPlan.workouts.length + mealItems.length;
   const completion = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
 
   const stats = useMemo(() => {
@@ -431,7 +146,7 @@ export default function App() {
         const key = dayKey(day);
         const plan = getEffectivePlan(role, day);
         const dayCheckin = normalizeCheckinEntry(challenge.checkins?.[role]?.[key]);
-        total += (plan.workouts?.length || 0) + (plan.habits?.length || 0);
+        total += (plan.workouts?.length || 0) + getPlanMealItems(plan).length;
         done += Object.values(dayCheckin.workouts || {}).filter(Boolean).length;
         done += Object.values(dayCheckin.habits || {}).filter(Boolean).length;
       }
@@ -459,7 +174,7 @@ export default function App() {
       const todayDone =
         Object.values(todayCheckin.workouts || {}).filter(Boolean).length +
         Object.values(todayCheckin.habits || {}).filter(Boolean).length;
-      const todayTotal = (todayPlan.workouts?.length || 0) + (todayPlan.habits?.length || 0);
+      const todayTotal = (todayPlan.workouts?.length || 0) + getPlanMealItems(todayPlan).length;
       const todayCompletion = todayTotal ? Math.round((todayDone / todayTotal) * 100) : 0;
       const prefs =
         challenge.users[myRole]?.preferences ||
@@ -662,51 +377,130 @@ export default function App() {
     }
 
     setPlanGenerating(true);
+    setPlanBackgroundGenerating(false);
     setToastMsg("");
     setPlanProgress(0);
-    const _progressTimer = setInterval(() => {
-      setPlanProgress((p) => (p < 90 ? p + 1 : p));
-    }, 1200);
-    let rolePlans;
-    let usedFallback = false;
-    try {
-      const result = await resolveRolePlans(createRole, preferenceProfile, startDate);
-      rolePlans = result.plans;
-      usedFallback = result.usedFallback;
-    } finally {
-      clearInterval(_progressTimer);
-      setPlanProgress(100);
-      setPlanGenerating(false);
-    }
+    setPlanProgressLabel("正在生成第 1–7 天计划…");
 
-    console.log("生成的计划 day-1:", JSON.stringify(rolePlans?.["day-1"]));
-    console.log("isStoredAiDayPlan:", isStoredAiDayPlan(rolePlans?.["day-1"]));
-
+    let inviteCode = "";
     let attempts = 0;
     while (attempts < 4) {
-      const code = generateInviteCode();
-      const exists = await fetchChallengeByCode(code);
-      if (exists.data?.data) {
-        attempts += 1;
-        continue;
+      const candidate = generateInviteCode();
+      const exists = await fetchChallengeByCode(candidate);
+      if (!exists.data?.data) {
+        inviteCode = candidate;
+        break;
       }
-      const created = createChallenge(code, createRole, name, startDate, preferenceSummary, preferenceProfile);
-      created.plans = {
-        male: createRole === ROLE_MALE ? rolePlans : {},
-        female: createRole === ROLE_FEMALE ? rolePlans : {},
-      };
-      const saved = await saveChallengeToCloud(code, created);
-      if (saved.error) {
-        setErrorMsg("创建失败，请检查 Supabase challenges 表");
-        return;
-      }
-      if (usedFallback) {
-        showToast("计划生成失败，已使用默认计划");
-      }
-      applyChallengeSession(created, createRole, code, name, "挑战创建成功", { force: true });
+      attempts += 1;
+    }
+    if (!inviteCode) {
+      setPlanGenerating(false);
+      setErrorMsg("邀请码生成冲突过多，请重试");
       return;
     }
-    setErrorMsg("邀请码生成冲突过多，请重试");
+
+    const pendingPlans = buildAllPendingPlans();
+    const created = createChallenge(inviteCode, createRole, name, startDate, preferenceSummary, preferenceProfile);
+    created.plans = {
+      male: createRole === ROLE_MALE ? { ...pendingPlans } : {},
+      female: createRole === ROLE_FEMALE ? { ...pendingPlans } : {},
+    };
+    created.planMeta = {
+      male: createRole === ROLE_MALE ? createEmptyPlanMeta() : getPlanMetaForRole(created, ROLE_MALE),
+      female: createRole === ROLE_FEMALE ? createEmptyPlanMeta() : getPlanMetaForRole(created, ROLE_FEMALE),
+    };
+
+    let mergedPlans = { ...pendingPlans };
+    let enteredMain = false;
+    let usedFallback = false;
+
+    const syncPlans = async (nextPlans, planMetaPatch, toastMessage) => {
+      mergedPlans = { ...mergedPlans, ...nextPlans };
+      const updated = {
+        ...created,
+        plans: {
+          ...created.plans,
+          [createRole]: { ...mergedPlans },
+        },
+        planMeta: {
+          ...created.planMeta,
+          [createRole]: {
+            ...(created.planMeta?.[createRole] || {}),
+            ...planMetaPatch,
+          },
+        },
+      };
+      created.planMeta = updated.planMeta;
+      const saved = await saveChallengeToCloud(inviteCode, updated);
+      if (saved.error) {
+        throw new Error("保存计划失败");
+      }
+      if (enteredMain) {
+        setChallenge(normalizeChallenge(updated));
+        if (toastMessage) showToast(toastMessage);
+      }
+      return updated;
+    };
+
+    try {
+      const result = await resolveRolePlans(createRole, preferenceProfile, startDate, {
+        onProgressUpdate: (pct, chunk) => {
+          setPlanProgress(pct);
+          setPlanProgressLabel(`正在生成 ${chunk.label}…`);
+        },
+        onChunkComplete: async (chunk, chunkPlans) => {
+          await syncPlans(chunkPlans, buildCompletedPlanMeta(7));
+          if (chunk.start === 1 && !enteredMain) {
+            enteredMain = true;
+            setPlanGenerating(false);
+            const latest = {
+              ...created,
+              plans: {
+                ...created.plans,
+                [createRole]: { ...mergedPlans },
+              },
+              planMeta: created.planMeta,
+            };
+            applyChallengeSession(latest, createRole, inviteCode, name, "挑战创建成功", { force: true });
+            showToast("第 1–7 天已就绪；第 8 天起将根据打卡数据自动生成后续计划");
+          }
+        },
+      });
+
+      usedFallback = result.usedFallback;
+      await syncPlans(result.plans, buildCompletedPlanMeta(result.generatedThrough || 7, result.usedFallback));
+      setPlanProgress(100);
+      setPlanProgressLabel("第 1–7 天计划已生成");
+
+      if (!enteredMain && isStoredAiDayPlan(result.plans["day-1"])) {
+        enteredMain = true;
+        const latest = {
+          ...created,
+          plans: {
+            ...created.plans,
+            [createRole]: { ...mergedPlans },
+          },
+          planMeta: created.planMeta,
+        };
+        applyChallengeSession(latest, createRole, inviteCode, name, "挑战创建成功", { force: true });
+        showToast(usedFallback ? "AI 未连接，已使用本地模板（第 1–7 天）" : "第 1–7 天计划已生成");
+      } else if (enteredMain && usedFallback) {
+        showToast("AI 未连接，第 1–7 天已用本地模板");
+      }
+    } catch {
+      setErrorMsg("创建失败，请稍后重试");
+      setPlanGenerating(false);
+      setPlanBackgroundGenerating(false);
+      return;
+    } finally {
+      setPlanGenerating(false);
+      setPlanBackgroundGenerating(false);
+    }
+
+    if (!enteredMain) {
+      setErrorMsg("计划生成失败，请稍后重试");
+    }
+    return;
   }
 
   async function handleJoinLookup() {
@@ -792,11 +586,6 @@ export default function App() {
     setJoinStep("preferences");
   }
 
-  async function generateJoinRolePlans(challengeStartDate) {
-    const preferenceProfile = normalizePreferenceProfile(joinPreferenceProfile, "", joinRole);
-    return requestGeneratedPlan(joinRole, preferenceProfile, challengeStartDate);
-  }
-
   async function handleJoinCompleteWithPreferences(preferenceProfileOverride) {
     resetJoinCreateErrors();
     const code = joinCode.trim().toUpperCase();
@@ -828,25 +617,80 @@ export default function App() {
 
     // 新用户加入 / 老用户更新偏好：调用 /api/generate-plan
     setPlanGenerating(true);
+    setPlanBackgroundGenerating(false);
     setToastMsg("");
     setPlanProgress(0);
-    const _progressTimer = setInterval(() => {
-      setPlanProgress((p) => (p < 90 ? p + 1 : p));
-    }, 1200);
+    setPlanProgressLabel("正在生成第 1–7 天计划…");
+
     let rolePlans;
     let usedFallback = false;
+    let enteredMain = false;
+
     try {
-      const result = await resolveRolePlans(joinRole, preferenceProfile, remote.challengeStartDate);
+      const result = await resolveRolePlans(joinRole, preferenceProfile, remote.challengeStartDate, {
+        onProgressUpdate: (pct, chunk) => {
+          setPlanProgress(pct);
+          setPlanProgressLabel(`正在生成 ${chunk.label}…`);
+        },
+        onChunkComplete: async (chunk, chunkPlans, mergedPartial) => {
+          if (chunk.start !== 1 || enteredMain) return;
+
+          const partialPlans = mergedPartial || {
+            ...buildPendingPlansFromDay(8),
+            ...chunkPlans,
+          };
+          const earlyUpdated = {
+            ...remote,
+            users: {
+              ...remote.users,
+              [joinRole]: {
+                ...remote.users[joinRole],
+                name: nickname,
+                goal: getGoalLabels(joinRole, preferenceProfile.goals),
+                preferenceProfile,
+                preferences: preferenceSummary,
+                joinedAt: remote.users[joinRole]?.joinedAt || new Date().toISOString(),
+              },
+            },
+            plans: {
+              ...remote.plans,
+              [joinRole]: partialPlans,
+            },
+            planMeta: {
+              ...remote.planMeta,
+              [joinRole]: buildCompletedPlanMeta(7),
+            },
+          };
+
+          const saved = await saveChallengeToCloud(code, earlyUpdated);
+          if (!saved.error) {
+            enteredMain = true;
+            setPlanGenerating(false);
+            applyChallengeSession(
+              earlyUpdated,
+              joinRole,
+              code,
+              nickname,
+              joinIsReturningUpdate ? "偏好已更新" : "加入成功",
+              { force: true }
+            );
+            resetJoinFlow();
+            showToast("第 1–7 天已就绪；第 8 天起将根据打卡数据自动生成后续计划");
+          }
+        },
+      });
+
       rolePlans = result.plans;
       usedFallback = result.usedFallback;
-    } finally {
-      clearInterval(_progressTimer);
       setPlanProgress(100);
+      setPlanProgressLabel("第 1–7 天计划已生成");
+    } finally {
       setPlanGenerating(false);
+      setPlanBackgroundGenerating(false);
     }
 
     if (!isStoredAiDayPlan(rolePlans?.["day-1"])) {
-      setErrorMsg("计划生成失败，请稍后重试");
+      if (!enteredMain) setErrorMsg("计划生成失败，请稍后重试");
       return;
     }
 
@@ -857,7 +701,7 @@ export default function App() {
         [joinRole]: {
           ...remote.users[joinRole],
           name: nickname,
-          goal: remote.users[joinRole]?.goal || getDefaultGoal(joinRole),
+          goal: getGoalLabels(joinRole, preferenceProfile.goals),
           preferenceProfile,
           preferences: preferenceSummary,
           joinedAt: remote.users[joinRole]?.joinedAt || new Date().toISOString(),
@@ -867,26 +711,38 @@ export default function App() {
         ...remote.plans,
         [joinRole]: rolePlans,
       },
+      planMeta: {
+        ...remote.planMeta,
+        [joinRole]: buildCompletedPlanMeta(result.generatedThrough || 7, usedFallback),
+      },
     };
 
     const saved = await saveChallengeToCloud(code, updated);
     if (saved.error) {
-      setErrorMsg("加入失败，请稍后重试");
+      if (!enteredMain) setErrorMsg("加入失败，请稍后重试");
       return;
     }
 
     if (usedFallback) {
-      showToast("计划生成失败，已使用默认计划");
+      showToast("AI 未连接，第 1–7 天已用本地模板");
+    } else if (!enteredMain) {
+      showToast("第 1–7 天计划已生成");
     }
-    applyChallengeSession(
-      updated,
-      joinRole,
-      code,
-      nickname,
-      joinIsReturningUpdate ? "偏好与计划已更新" : "加入成功，已连接共享挑战",
-      { force: true }
-    );
-    resetJoinFlow();
+
+    if (!enteredMain) {
+      applyChallengeSession(
+        updated,
+        joinRole,
+        code,
+        nickname,
+        joinIsReturningUpdate ? "偏好与计划已更新" : "加入成功，已连接共享挑战",
+        { force: true }
+      );
+      resetJoinFlow();
+    } else {
+      setChallenge(normalizeChallenge(updated));
+    }
+    return;
   }
 
   function leaveChallenge() {
@@ -1013,6 +869,117 @@ export default function App() {
   }, [challenge, myRole, viewingRole, dKey]);
 
   useEffect(() => {
+    if (!challenge || !myRole || !inviteCode || !supabase || screen !== "main") return;
+    if (planGenerating || autoGenInFlightRef.current) return;
+
+    const meta = getPlanMetaForRole(challenge, myRole);
+    if (meta.generating) return;
+
+    const chunk = getNextChunkToGenerate(currentDay, meta.generatedThrough);
+    if (!chunk || chunk.start === 1) return;
+
+    let cancelled = false;
+
+    (async () => {
+      autoGenInFlightRef.current = true;
+      setPlanBackgroundGenerating(true);
+      setPlanBackgroundLabel(`根据前 ${chunk.start - 1} 天打卡数据生成 ${chunk.label}…`);
+
+      let locking = null;
+      try {
+        const latestResult = await fetchChallengeByCode(inviteCode);
+        if (cancelled || latestResult.error || !latestResult.data?.data) return;
+
+        const fresh = normalizeChallenge(latestResult.data.data);
+        const freshMeta = getPlanMetaForRole(fresh, myRole);
+        if (freshMeta.generating || freshMeta.generatedThrough >= chunk.end) return;
+
+        locking = {
+          ...fresh,
+          planMeta: {
+            ...fresh.planMeta,
+            [myRole]: {
+              ...freshMeta,
+              generating: chunk.start,
+              lastError: null,
+            },
+          },
+        };
+        setChallenge(locking);
+        await saveChallengeToCloud(inviteCode, locking);
+
+        const result = await generatePlanChunkForRole(locking, myRole, chunk);
+        if (cancelled) return;
+
+        const rolePlans = {
+          ...(locking.plans?.[myRole] || {}),
+          ...result.plans,
+        };
+        const updated = {
+          ...locking,
+          plans: {
+            ...locking.plans,
+            [myRole]: rolePlans,
+          },
+          planMeta: {
+            ...locking.planMeta,
+            [myRole]: {
+              generatedThrough: chunk.end,
+              generating: null,
+              lastError: result.usedFallback ? "已用模板补全" : null,
+              lastGeneratedAt: new Date().toISOString(),
+            },
+          },
+        };
+
+        setChallenge(normalizeChallenge(updated));
+        await saveChallengeToCloud(inviteCode, updated);
+        showToast(
+          result.usedFallback
+            ? `${chunk.label} 生成失败，已用模板补全`
+            : `${chunk.label} 已根据上周打卡数据生成`
+        );
+      } catch {
+        if (!cancelled && locking) {
+          const freshMeta = getPlanMetaForRole(locking, myRole);
+          const unlocked = {
+            ...locking,
+            planMeta: {
+              ...locking.planMeta,
+              [myRole]: {
+                ...freshMeta,
+                generating: null,
+                lastError: "自动生成失败",
+              },
+            },
+          };
+          setChallenge(normalizeChallenge(unlocked));
+          await saveChallengeToCloud(inviteCode, unlocked);
+          showToast(`${chunk.label} 自动生成失败，打开 App 时会重试`);
+        }
+      } finally {
+        autoGenInFlightRef.current = false;
+        if (!cancelled) {
+          setPlanBackgroundGenerating(false);
+          setPlanBackgroundLabel("");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    challenge?.planMeta?.[myRole]?.generatedThrough,
+    challenge?.planMeta?.[myRole]?.generating,
+    currentDay,
+    myRole,
+    screen,
+    inviteCode,
+    planGenerating,
+  ]);
+
+  useEffect(() => {
 
     const channels = [];
     const handlers = (payload) => {
@@ -1074,8 +1041,24 @@ export default function App() {
             <CardContent className="card-content section-stack">
               <h2 className="section-heading">创建挑战</h2>
               <div className="role-toggle-grid">
-                <Button className={`role-btn ${createRole === ROLE_MALE ? "is-active" : ""}`} onClick={() => setCreateRole(ROLE_MALE)}>♂ 男生</Button>
-                <Button className={`role-btn ${createRole === ROLE_FEMALE ? "is-active" : ""}`} onClick={() => setCreateRole(ROLE_FEMALE)}>♀ 女生</Button>
+                <Button
+                  className={`role-btn ${createRole === ROLE_MALE ? "is-active" : ""}`}
+                  onClick={() => {
+                    setCreateRole(ROLE_MALE);
+                    setCreatePreferenceProfile((prev) => normalizePreferenceProfile(prev, "", ROLE_MALE));
+                  }}
+                >
+                  ♂ 男生
+                </Button>
+                <Button
+                  className={`role-btn ${createRole === ROLE_FEMALE ? "is-active" : ""}`}
+                  onClick={() => {
+                    setCreateRole(ROLE_FEMALE);
+                    setCreatePreferenceProfile((prev) => normalizePreferenceProfile(prev, "", ROLE_FEMALE));
+                  }}
+                >
+                  ♀ 女生
+                </Button>
               </div>
               <input
                 className="text-input"
@@ -1113,14 +1096,8 @@ export default function App() {
                     />
                   </div>
                   <p style={{ color: "#a78bfa", fontSize: 14 }}>{planProgress}%</p>
-                  <p style={{ fontSize: 12, color: "#666", marginTop: 8 }}>
-                    {planProgress < 30
-                      ? "正在分析训练偏好..."
-                      : planProgress < 60
-                        ? "正在制定训练计划..."
-                        : planProgress < 85
-                          ? "正在优化饮食建议..."
-                          : "即将完成..."}
+                  <p style={{ fontSize: 12, color: "#888", marginTop: 8 }}>
+                    {planProgressLabel || "正在并行生成 3 段计划…"}
                   </p>
                 </div>
               ) : (
@@ -1212,14 +1189,8 @@ export default function App() {
                       />
                     </div>
                     <p style={{ color: "#a78bfa", fontSize: 14 }}>{planProgress}%</p>
-                    <p style={{ fontSize: 12, color: "#666", marginTop: 8 }}>
-                      {planProgress < 30
-                        ? "正在分析训练偏好..."
-                        : planProgress < 60
-                          ? "正在制定训练计划..."
-                          : planProgress < 85
-                            ? "正在优化饮食建议..."
-                            : "即将完成..."}
+                    <p style={{ fontSize: 12, color: "#888", marginTop: 8 }}>
+                      {planProgressLabel || "正在并行生成 3 段计划…"}
                     </p>
                   </div>
                 ) : (
@@ -1353,6 +1324,11 @@ export default function App() {
         <Card className="card glass-card">
           <CardContent className="card-content">
             <div className="sync-line"><Cloud size={16} /> {syncStatus}</div>
+            {planBackgroundGenerating ? (
+              <div className="info-box plan-bg-gen-note">
+                ⏳ {planBackgroundLabel || "正在根据打卡数据生成后续计划…"}
+              </div>
+            ) : null}
             <div className="identity-line">你当前身份：{roleLabel(myRole)}</div>
             <div className="identity-line">挑战周期：{challenge.challengeStartDate} ~ {getDateKey(challengeEndDateObj)}</div>
             <div className="identity-line">{hasStarted ? `今天是 Day ${currentDay} / 21` : `挑战将于 ${challenge.challengeStartDate} 开始`}</div>
@@ -1405,65 +1381,77 @@ export default function App() {
               </Card>
             ) : (
               <>
-            <Card className="card white-card">
-              <CardContent className="card-content card-large">
+            <Card className="card glass-card">
+              <CardContent className="card-content">
                 <div className="today-top">
                   <div>
                     <div className="day-label">Day {selectedDay} / 21</div>
                     <div className="today-goal">{getDateKey(selectedChallengeDate)}</div>
                     <h2 className="today-title">{selectedPlan.title}</h2>
                     <p className="today-goal">{roleLabel(viewingRole)} ｜目标：{challenge.users[viewingRole].goal || getDefaultGoal(viewingRole)}</p>
-                    {challenge.users[viewingRole].preferences ? (
-                      <p className="today-goal">个性化：{challenge.users[viewingRole].preferences}</p>
-                    ) : null}
                   </div>
                   <div className="today-percent">
                     <div className="today-percent-value">{completion}%</div>
                     <div className="today-percent-label">{dayPermissionLabel}</div>
                   </div>
                 </div>
-                <div className="permission-pill">{dayPermissionLabel}</div>
-                <div className="section-title"><Activity size={18} />今日训练</div>
+              </CardContent>
+            </Card>
+
+            <Card className="card white-card workout-panel">
+              <CardContent className="card-content card-large">
                 <div className="workout-list">
                   {selectedPlan.workouts.map((exercise, index) => (
                     <button
                       key={`${exercise.name}-${index}`}
+                      type="button"
                       onClick={() => toggleWorkout(index)}
                       disabled={!canEdit}
-                      className={`workout-item ${viewingRole === ROLE_FEMALE ? "female-soft" : ""} ${checkedWorkouts[index] ? "is-done" : ""}`}
+                      className={`workout-item ${checkedWorkouts[index] ? "is-done" : ""}`}
                     >
                       <div className="workout-main">
-                        <div className="workout-name">{exercise.name}</div>
-                        <div className="workout-meta">{`${exercise.sets} 组 × ${exercise.reps} 次`}</div>
-                        <div className="workout-meta">休息：{exercise.rest}</div>
-                        <div className="workout-note">{exercise.note}</div>
+                        <div className="workout-name">{formatWorkoutName(exercise.name)}</div>
+                        <div className="workout-meta">{formatWorkoutVolume(exercise)}</div>
+                        {formatRestTime(exercise.rest) ? (
+                          <div className="workout-meta">{formatRestTime(exercise.rest)}</div>
+                        ) : null}
+                        {exercise.note ? <div className="workout-note">{exercise.note}</div> : null}
                       </div>
                       <div className="workout-check">
-                        {checkedWorkouts[index] ? <CheckCircle2 size={24} /> : <Circle size={24} />}
+                        {checkedWorkouts[index] ? <CheckCircle2 size={22} /> : <Circle size={22} />}
                       </div>
                     </button>
                   ))}
                 </div>
-                <div className="day-nav">
-                  <Button className="dark-btn" onClick={() => setSelectedDay((prev) => Math.max(1, prev - 1))}>上一天</Button>
-                  <Button className="dark-btn" onClick={() => setSelectedDay((prev) => Math.min(21, prev + 1))}>下一天</Button>
-                </div>
               </CardContent>
             </Card>
 
+            <div className="day-nav day-nav-standalone">
+              <Button className="dark-btn" onClick={() => setSelectedDay((prev) => Math.max(1, prev - 1))}>上一天</Button>
+              <Button className="dark-btn" onClick={() => setSelectedDay((prev) => Math.min(21, prev + 1))}>下一天</Button>
+            </div>
+
             <Card className="card glass-card">
               <CardContent className="card-content">
-                <div className="section-title"><Heart size={18} />饮食 / 恢复</div>
-                <div className="habit-list">
-                  {selectedPlan.habits.map((habit, index) => (
+                <div className="section-title"><Heart size={18} />饮食建议</div>
+                {usesLegacyRecoveryHabits(selectedPlan) ? (
+                  <div className="info-box meal-legacy-note">
+                    当前为旧版饮食/恢复格式。请重新创建挑战（需 vercel dev 调用 AI）以获取按日调整的六餐建议。
+                  </div>
+                ) : null}
+                <div className="meal-list">
+                  {mealItems.map((item, index) => (
                     <button
-                      key={`${habit}-${index}`}
+                      key={`${item.key}-${index}`}
                       onClick={() => toggleHabit(index)}
                       disabled={!canEdit}
-                      className={`habit-item ${checkedHabits[index] ? "is-done" : ""}`}
+                      className={`meal-item ${checkedHabits[index] ? "is-done" : ""}`}
                     >
                       {checkedHabits[index] ? <CheckCircle2 size={18} /> : <Circle size={18} />}
-                      <span className="habit-text">{habit}</span>
+                      <div className="meal-item-body">
+                        {item.label ? <div className="meal-item-label">{item.label}</div> : null}
+                        <div className="meal-item-text">{item.text}</div>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -1591,7 +1579,7 @@ export default function App() {
                       const plan = getEffectivePlan(viewingRole, day);
                       const dayCheckin = normalizeCheckinEntry(challenge.checkins?.[viewingRole]?.[k]);
                       const done = Object.values(dayCheckin.workouts || {}).filter(Boolean).length + Object.values(dayCheckin.habits || {}).filter(Boolean).length;
-                      const total = (plan.workouts?.length || 0) + (plan.habits?.length || 0);
+                      const total = (plan.workouts?.length || 0) + getPlanMealItems(plan).length;
                       pct = total ? Math.round((done / total) * 100) : 0;
                     }
 

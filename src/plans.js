@@ -1,7 +1,10 @@
 const ROLE_MALE = "male";
 const ROLE_FEMALE = "female";
 
-const dailyHabits = ["Protein Target（蛋白质达标）", "Water 2L+（饮水2L+）", "Sleep 7h+（睡眠7小时+）", "Stretching（拉伸恢复）"];
+import { buildFallbackMeals, formatMealsAsHabits } from "./mealPlan";
+import { formatChinesePrimary } from "./formatLabels";
+import { getDefaultGoalForRole, getGoalLabels } from "./preferenceProfile";
+import { parseDateOnly, addDays, formatDateOnly } from "./dateUtils";
 
 const maleTemplates = {
   chestTriA: {
@@ -100,13 +103,13 @@ const maleTemplates = {
 
 const femaleTemplates = {
   lowerA: {
-    title: "Glutes & Legs A（臀腿A）",
+    title: "臀腿训练日 A（Glutes & Legs A）",
     workouts: [
-      { name: "Leg Press（腿举）", sets: 4, reps: "10-12", rest: "90s", note: "Push through heels and control lowering." },
-      { name: "Goblet Squat（壶铃深蹲）", sets: 3, reps: "10-12", rest: "75s", note: "Keep chest tall and core braced." },
-      { name: "Romanian Deadlift（罗马尼亚硬拉）", sets: 3, reps: "10-12", rest: "90s", note: "Hinge from hips, neutral spine." },
-      { name: "Back Extension（公羊挺身）", sets: 3, reps: "12-15", rest: "60s", note: "Stop at neutral and squeeze glutes." },
-      { name: "Hip Abduction（臀外展）", sets: 3, reps: "15-20", rest: "45s", note: "Pause one second at outer range." },
+      { name: "腿举（Leg Press）", sets: 4, reps: "10-12", rest: "90s", note: "脚跟发力，控制下放，膝盖与脚尖方向一致。" },
+      { name: "深蹲（Squat）", sets: 3, reps: "8-10", rest: "90s", note: "L1–L2 可用史密斯或杯式深蹲；核心收紧，蹲至大腿平行。" },
+      { name: "罗马尼亚硬拉（Romanian Deadlift）", sets: 3, reps: "10-12", rest: "90s", note: "髋铰链主导，背中立，感受腘绳肌与臀拉伸。" },
+      { name: "山羊挺身（Hyperextension）", sets: 3, reps: "12-15", rest: "60s", note: "顶端夹臀，避免过度反弓腰椎。" },
+      { name: "臀外展（Hip Abduction）", sets: 3, reps: "15-20", rest: "45s", note: "外展至峰值停1秒，控制还原。" },
     ],
   },
   upperA: {
@@ -127,13 +130,13 @@ const femaleTemplates = {
     ],
   },
   lowerB: {
-    title: "Glutes Focus B（臀腿强化B）",
+    title: "臀腿训练日 B（Glutes Focus B）",
     workouts: [
-      { name: "Leg Press（腿举）", sets: 4, reps: "12-15", rest: "90s", note: "Slightly higher reps for joint-friendly volume." },
-      { name: "Goblet Squat（壶铃深蹲）", sets: 3, reps: "10-12", rest: "75s", note: "Sit between hips, keep knees tracking toes." },
-      { name: "Romanian Deadlift（罗马尼亚硬拉）", sets: 3, reps: "10-12", rest: "90s", note: "Stretch hamstrings, no spinal rounding." },
-      { name: "Hip Abduction（臀外展）", sets: 4, reps: "15-20", rest: "45s", note: "Control return phase for better glute burn." },
-      { name: "Back Extension（公羊挺身）", sets: 2, reps: "12-15", rest: "60s", note: "Use glutes, avoid excessive lumbar extension." },
+      { name: "腿举（Leg Press）", sets: 4, reps: "12-15", rest: "90s", note: "偏高次数容量，关节友好。" },
+      { name: "深蹲（Squat）", sets: 3, reps: "8-10", rest: "90s", note: "第二循环可较 A 日略加重，保持动作质量。" },
+      { name: "罗马尼亚硬拉（Romanian Deadlift）", sets: 3, reps: "10-12", rest: "90s", note: "慢速离心，臀主导发力。" },
+      { name: "山羊挺身（Hyperextension）", sets: 3, reps: "12-15", rest: "60s", note: "用臀发力顶起，勿靠甩动。" },
+      { name: "臀外展（Hip Abduction）", sets: 4, reps: "15-20", rest: "45s", note: "强化臀中肌，控制还原阶段。" },
     ],
   },
   upperB: {
@@ -167,34 +170,8 @@ const femaleTemplates = {
 const maleWeekdayCycle = ["chestTriA", "backBiA", "shoulderLegA", "recoveryCore", "basketball", "upperHypertrophy", "basketball"];
 const femaleWeekdayCycle = ["lowerA", "upperA", "cardioRecovery", "balletRecovery", "lowerB", "upperB", "activeRecovery"];
 
-function formatLocalDate(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-function parseDateOnly(dateValue) {
-  if (dateValue instanceof Date) {
-    return new Date(dateValue.getFullYear(), dateValue.getMonth(), dateValue.getDate());
-  }
-  if (typeof dateValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
-    const [y, m, d] = dateValue.split("-").map(Number);
-    return new Date(y, m - 1, d);
-  }
-  const parsed = new Date(dateValue);
-  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
-}
-
-function toDateOnly(dateValue) {
-  const fallback = formatLocalDate(new Date());
-  return parseDateOnly(dateValue || fallback);
-}
-
 function getDateForDay(startDate, day) {
-  const date = toDateOnly(startDate);
-  date.setDate(date.getDate() + (day - 1));
-  return date;
+  return addDays(parseDateOnly(startDate || formatDateOnly(new Date())), day - 1);
 }
 
 function getWeekdayIndex(date) {
@@ -204,10 +181,15 @@ function getWeekdayIndex(date) {
 
 function buildPlanItem(day, key, templates) {
   const base = templates[key];
+  const meals = buildFallbackMeals(key, day);
   return {
-    title: `Day ${day} · ${base.title}`,
-    workouts: base.workouts,
-    habits: dailyHabits,
+    title: formatChinesePrimary(`Day ${day} · ${base.title}`),
+    workouts: base.workouts.map((item) => ({
+      ...item,
+      name: formatChinesePrimary(item.name),
+    })),
+    meals,
+    habits: formatMealsAsHabits(meals),
   };
 }
 
@@ -223,7 +205,7 @@ function buildDynamicPlan(role, day, challengeStartDate) {
 }
 
 export function getDefaultGoal(role) {
-  return role === ROLE_MALE ? "可见腹肌 + 线条感 + 精瘦运动体态" : "臀腿增长 + 腿部塑形 + 肩背轻线条";
+  return getGoalLabels(role, [getDefaultGoalForRole(role)]);
 }
 
 export function getBasePlan(role, day, challengeStartDate) {
