@@ -169,8 +169,3 @@ export function usesLegacyRecoveryHabits(plan) {
   const habits = plan?.habits || [];
   return habits.some((item) => /Sleep|Stretching|Protein Target|Water 2L|睡眠|拉伸|蛋白质达标|饮水/i.test(String(item)));
 }
-
-export function planHasStructuredMeals(plan) {
-  if (!plan?.meals || typeof plan.meals !== "object") return false;
-  return MEAL_KEYS.every((key) => String(plan.meals[key] || "").trim());
-}

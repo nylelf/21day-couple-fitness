@@ -1,39 +1,6 @@
-function hasCJK(text) {
-  return /[\u4e00-\u9fff]/.test(text);
-}
+export { formatChinesePrimary } from "../lib/formatLabels.js";
 
-function isMostlyLatin(text) {
-  const trimmed = String(text || "").trim();
-  if (!trimmed || hasCJK(trimmed)) return false;
-  return /[a-zA-Z]/.test(trimmed);
-}
-
-function normalizeParens(text) {
-  return String(text || "").replace(/\(/g, "（").replace(/\)/g, "）");
-}
-
-export function formatChinesePrimary(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return raw;
-
-  const normalized = normalizeParens(raw);
-  const prefixMatch = normalized.match(/^((?:Day\s*\d+|第\s*\d+\s*天)\s*[·•\-]\s*)(.+)$/i);
-  const prefix = prefixMatch ? prefixMatch[1] : "";
-  const body = prefixMatch ? prefixMatch[2] : normalized;
-
-  const match = body.match(/^(.+?)（([^）]+)）$/);
-  if (!match) return raw;
-
-  const left = match[1].trim();
-  const right = match[2].trim();
-
-  if (isMostlyLatin(left) && hasCJK(right)) {
-    const swapped = `${right}（${left}）`;
-    return prefix ? `${prefix}${swapped}` : swapped;
-  }
-
-  return raw;
-}
+import { formatChinesePrimary } from "../lib/formatLabels.js";
 
 export function formatWorkoutName(name) {
   return formatChinesePrimary(name);

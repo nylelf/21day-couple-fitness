@@ -1,20 +1,24 @@
 import { analyzePreferencesWithAI } from "./analyzePreferences.js";
+import { formatDateOnly } from "../lib/dateUtils.js";
+import { formatChinesePrimary } from "../lib/formatLabels.js";
+import { extractJsonObject } from "../lib/jsonUtils.js";
 import {
   buildPersonalizationFingerprint,
   buildPersonalizationPromptBlock,
   finalizePlansWithProfile,
 } from "../lib/planPersonalization.js";
-import {
-  getDetectedActivityDaysInRange,
-  mergeDetectedIntoActivitySchedule,
-} from "../lib/activitySchedule.js";
 import { formatPreferenceAnalysisForPlanPrompt } from "../lib/preferenceAnalysisPrompt.js";
 import {
   getPeriodDaysInChallenge,
   getPeriodDaysInRange,
   mergeDetectedIntoPeriodSchedule,
 } from "../lib/periodSchedule.js";
-import { formatWeeklyActivitiesText } from "../lib/weeklyActivities.js";
+import { normalizeGoalsFromProfile, roleDisplayLabel } from "../lib/preferenceUtils.js";
+import {
+  formatWeeklyActivitiesText,
+  getDetectedActivityDaysInRange,
+  mergeDetectedIntoActivitySchedule,
+} from "../lib/weeklyActivities.js";
 
 const MODEL = "claude-haiku-4-5-20251001";
 const DAYS = 21;
@@ -119,23 +123,6 @@ const SYSTEM_PROMPT = `你必须用中文回复，所有内容包括动作名称
 title 示例："推日 · 胸+三头（Push Day · Chest + Triceps）"、"篮球日（Basketball Day）"、"第8天 · 拉日 · 背部（Pull Day）"。
 动作名称示例："杠铃卧推（Barbell Bench Press）"、"篮球（Basketball）"。`;
 
-function parseDateOnly(dateValue) {
-  if (typeof dateValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
-    const [y, m, d] = dateValue.split("-").map(Number);
-    return new Date(y, m - 1, d);
-  }
-  const parsed = new Date(dateValue);
-  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
-}
-
-function formatDateOnly(dateValue) {
-  const d = parseDateOnly(dateValue);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 function isFemaleGluteLegDay(dayPlan, role) {
   if (role !== "female") return false;
   const title = String(dayPlan?.title || "");
@@ -168,18 +155,8 @@ function buildFemaleGluteLegGuide(role, level) {
 - 若器材为徒手/居家：腿举→深蹲变式，RDL→单腿 RDL，臀外展→弹力带侧抬腿，山羊挺身→超人式`;
 }
 
-function roleDisplay(role) {
-  return role === "male" ? "男生" : role === "female" ? "女生" : "学员";
-}
-
-function normalizeGoals(profile) {
-  const raw = profile?.goals !== undefined ? profile.goals : profile?.goal;
-  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
-  return list.filter(Boolean);
-}
-
 function buildGoalPrompt(profile) {
-  const goals = normalizeGoals(profile);
+  const goals = normalizeGoalsFromProfile(profile);
   if (!goals.length) return { goalText: "未填写", goalGuide: "围绕用户目标安排训练与饮食" };
 
   const labels = goals.map((value) => GOAL_LABELS[value] || value);
@@ -200,7 +177,7 @@ function buildUserPrompt({
   preferenceAnalysis = null,
 }) {
   const profile = preferenceProfile || {};
-  const gender = roleDisplay(role);
+  const gender = roleDisplayLabel(role);
   const level = FITNESS_LEVEL_LABELS[profile.fitnessLevel] || profile.fitnessLevel || "未填写";
   const levelGuide = FITNESS_LEVEL_GUIDE[profile.fitnessLevel] || "按训练等级匹配难度与动作选择";
   const { goalText, goalGuide } = buildGoalPrompt(profile);
@@ -384,59 +361,6 @@ meals 示例（day-1 腿日训练）：
 }`;
 }
 
-function extractJsonObject(text) {
-  const trimmed = (text || "").trim();
-  if (!trimmed) throw new Error("AI 返回为空");
-
-  try {
-    if (trimmed.startsWith("{")) return JSON.parse(trimmed);
-  } catch {
-    // continue
-  }
-
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) return JSON.parse(fenced[1].trim());
-
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
-
-  throw new Error("无法解析 AI 返回的 JSON");
-}
-
-function hasCJK(text) {
-  return /[\u4e00-\u9fff]/.test(text);
-}
-
-function isMostlyLatin(text) {
-  const trimmed = String(text || "").trim();
-  if (!trimmed || hasCJK(trimmed)) return false;
-  return /[a-zA-Z]/.test(trimmed);
-}
-
-function formatChinesePrimary(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return raw;
-
-  const normalized = raw.replace(/\(/g, "（").replace(/\)/g, "）");
-  const prefixMatch = normalized.match(/^((?:Day\s*\d+|第\s*\d+\s*天)\s*[·•\-]\s*)(.+)$/i);
-  const prefix = prefixMatch ? prefixMatch[1] : "";
-  const body = prefixMatch ? prefixMatch[2] : normalized;
-
-  const match = body.match(/^(.+?)（([^）]+)）$/);
-  if (!match) return raw;
-
-  const left = match[1].trim();
-  const right = match[2].trim();
-
-  if (isMostlyLatin(left) && hasCJK(right)) {
-    const swapped = `${right}（${left}）`;
-    return prefix ? `${prefix}${swapped}` : swapped;
-  }
-
-  return raw;
-}
-
 function normalizeWorkout(item) {
   return {
     name: formatChinesePrimary(String(item?.name || "训练动作")),
@@ -546,16 +470,6 @@ export default async function handler(req, res) {
       dayStart,
       dayEnd,
     });
-    const detectedActivities = getDetectedActivityDaysInRange(
-      preferenceProfile,
-      startDate,
-      dayStart,
-      dayEnd
-    );
-    preferenceAnalysis = mergeDetectedIntoActivitySchedule(
-      preferenceAnalysis,
-      detectedActivities
-    );
   } catch (err) {
     console.warn("偏好分析步骤失败，将仅依赖主生成 prompt:", err.message);
   }
@@ -620,7 +534,7 @@ export default async function handler(req, res) {
       .join("")
       .trim();
 
-    const parsed = extractJsonObject(text);
+    const parsed = extractJsonObject(text, "无法解析 AI 返回的 JSON");
     let plans = normalizeGeneratedPlan(parsed, dayStart, dayEnd, role);
     if (!plans) {
       return res.status(502).json({ error: "AI 返回的计划格式不完整" });

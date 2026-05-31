@@ -20,7 +20,6 @@ import PreferenceForm from "./PreferenceForm";
 import { getPlanMealItems, usesLegacyRecoveryHabits } from "./mealPlan";
 import { formatPlanTitle, formatRestTime, formatWorkoutName, formatWorkoutVolume } from "./formatLabels";
 import {
-  createDefaultPreferenceProfile,
   createDefaultPreferenceProfileForRole,
   DEFAULT_PREFERENCE_PROFILE,
   getGoalLabels,

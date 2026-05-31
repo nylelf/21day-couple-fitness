@@ -1,29 +1,10 @@
+import { extractJsonObject } from "../lib/jsonUtils.js";
 import {
   buildPreferenceAnalysisPrompt,
   normalizePreferenceAnalysis,
 } from "../lib/preferenceAnalysisPrompt.js";
 
 const MODEL = "claude-haiku-4-5-20251001";
-
-function extractJsonObject(text) {
-  const trimmed = (text || "").trim();
-  if (!trimmed) throw new Error("AI 返回为空");
-
-  try {
-    if (trimmed.startsWith("{")) return JSON.parse(trimmed);
-  } catch {
-    // continue
-  }
-
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) return JSON.parse(fenced[1].trim());
-
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) return JSON.parse(trimmed.slice(start, end + 1));
-
-  throw new Error("无法解析偏好分析 JSON");
-}
 
 export async function analyzePreferencesWithAI({
   apiKey,
@@ -70,6 +51,6 @@ export async function analyzePreferencesWithAI({
     .join("")
     .trim();
 
-  const parsed = extractJsonObject(text);
+  const parsed = extractJsonObject(text, "无法解析偏好分析 JSON");
   return normalizePreferenceAnalysis(parsed, dayStart, dayEnd);
 }
