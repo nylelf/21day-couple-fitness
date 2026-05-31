@@ -160,11 +160,12 @@ export default function PreferenceForm({ role, value, onChange }) {
 
       <div className="pref-field">
         <div className="pref-field-label">每周其他运动（可选）</div>
+        <div className="pref-field-hint">用自然语言描述即可，AI 会理解。例如：周日爬山、周一羽毛球、周四晚上芭蕾课</div>
         <textarea
           className="text-area"
           value={value.otherActivities || ""}
           onChange={(event) => patch({ otherActivities: event.target.value })}
-          placeholder="例如：周五打篮球、周日篮球；周四晚上芭蕾课（写清星期几）"
+          placeholder="例如：周日去爬山；周一打羽毛球；周四晚上芭蕾课；周五打篮球"
         />
       </div>
 

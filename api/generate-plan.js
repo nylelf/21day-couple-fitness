@@ -1,9 +1,10 @@
+import { analyzePreferencesWithAI } from "./analyzePreferences.js";
 import {
   buildPersonalizationFingerprint,
   buildPersonalizationPromptBlock,
-  detectActivityDays,
-  shapePlansWithProfile,
+  applyLightPlanGuards,
 } from "../lib/planPersonalization.js";
+import { formatPreferenceAnalysisForPlanPrompt } from "../lib/preferenceAnalysisPrompt.js";
 
 const MODEL = "claude-haiku-4-5-20251001";
 const DAYS = 21;
@@ -100,7 +101,10 @@ const TRAINING_SPLIT_GUIDE = {
 
 const SYSTEM_PROMPT = `你必须用中文回复，所有内容包括动作名称、note、meals、title都必须是中文。动作名称与每日 title 格式必须是：中文名（English），英文只能放在括号内，禁止 English（中文）这种反写格式。禁止输出纯英文句子。
 你是一位专业健身教练，擅长为情侣制定科学的个性化训练计划与一日六餐饮食方案。
-【核心原则】每位学员的配置不同，输出的计划必须在：训练分化日程、动作选择、器材类型、每日动作数量、组次数与休息上明显不同；禁止给所有人相同的「推拉腿」通用模板。
+【核心原则】
+1. 必须综合理解学员全部偏好（性别、等级、目标、器材、时长、分化、每周其他运动原文、伤病备注），禁止套用固定模板
+2. 「每周其他运动」为自由文本（如周日爬山、周一羽毛球、周四芭蕾等），由你自行读懂并安排对应日期，不要用固定动作表覆盖
+3. L1 与 L4（及其他等级）在组数、次数、休息、动作难度上必须明显不同
 请严格只返回 JSON，不要任何解释、标题或 markdown 格式。
 title 示例："推日 · 胸+三头（Push Day · Chest + Triceps）"、"篮球日（Basketball Day）"、"第8天 · 拉日 · 背部（Pull Day）"。
 动作名称示例："杠铃卧推（Barbell Bench Press）"、"篮球（Basketball）"。`;
@@ -221,7 +225,15 @@ function buildGoalPrompt(profile) {
   };
 }
 
-function buildUserPrompt({ role, preferenceProfile, challengeStartDate, dayStart = 1, dayEnd = DAYS, iterativeContext = null }) {
+function buildUserPrompt({
+  role,
+  preferenceProfile,
+  challengeStartDate,
+  dayStart = 1,
+  dayEnd = DAYS,
+  iterativeContext = null,
+  preferenceAnalysis = null,
+}) {
   const profile = preferenceProfile || {};
   const gender = roleDisplay(role);
   const level = FITNESS_LEVEL_LABELS[profile.fitnessLevel] || profile.fitnessLevel || "未填写";
@@ -246,6 +258,7 @@ function buildUserPrompt({ role, preferenceProfile, challengeStartDate, dayStart
     dayStart,
     dayEnd
   );
+  const analysisBlock = formatPreferenceAnalysisForPlanPrompt(preferenceAnalysis, dayStart, dayEnd);
 
   const iterativeSection =
     dayStart > 1 && iterativeContext?.weekReviewText
@@ -269,12 +282,6 @@ ${iterativeContext.priorPlansText || ""}
 `
         : "";
 
-  const activityDays = detectActivityDays(otherActivities, challengeStartDate, DAYS);
-
-  const activityInfo = activityDays.length > 0
-    ? `\n【其他运动日 — 强制执行】以下天数只能 15 分钟轻度拉伸，title 注明运动名称，workouts 最多 1-2 个拉伸动作：\n${activityDays.map((d) => `第${d.day}天（${d.label}）`).join("、")}`
-    : "";
-
   let periodInfo = "";
   if (role === "female" && profile.lastPeriodDate) {
     const adjustments = getPeriodAdjustmentDays(
@@ -292,11 +299,11 @@ ${iterativeContext.priorPlansText || ""}
 
   return `${personalizationBlock}
 
-请为以下用户生成 21 天挑战中 **${dayRangeLabel}** 的训练计划（共 ${dayKeys.length} 天，键名必须是 ${dayKeys.join("、")}）。
+${analysisBlock ? `${analysisBlock}\n\n` : ""}请为以下用户生成 21 天挑战中 **${dayRangeLabel}** 的训练计划（共 ${dayKeys.length} 天，键名必须是 ${dayKeys.join("、")}）。
 
 这是完整 21 天计划的分段生成（第 ${dayStart}–${dayEnd} 天）。必须与前后分段在分化顺序、强度递进上保持连贯。
 
-请严格根据上方【个人配置锁定】与下列学员信息制定计划（二者冲突时以【个人配置锁定】为准）：
+请根据上方偏好数据${analysisBlock ? "与 AI 偏好综合分析" : ""}制定计划（综合分析优先理解用户原文）：
 
 【基本信息摘要】
 - 性别：${gender}
@@ -307,9 +314,8 @@ ${iterativeContext.priorPlansText || ""}
 - 训练部位分化：${trainingSplit}（${trainingSplitGuide}；每天 title 必须标明当天训练部位/分化日）
 
 【特殊安排】
-- 每周其他运动：${otherActivities}（这些运动日当天只安排15分钟拉伸恢复，不安排正式训练，title注明"运动日恢复"）
+- 每周其他运动（用户原文，请你理解后安排对应日期）：${otherActivities}
 - 身体状况备注：${healthNotes}（有伤病或特殊情况的动作必须规避或替换）
-${activityInfo}
 
 ${periodInfo}
 ${femaleGluteLegGuide}
@@ -550,13 +556,29 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "无效的天数范围 dayStart / dayEnd" });
   }
 
+  const startDate = challengeStartDate || formatDateOnly(new Date());
+  let preferenceAnalysis = null;
+  try {
+    preferenceAnalysis = await analyzePreferencesWithAI({
+      apiKey,
+      role,
+      preferenceProfile,
+      challengeStartDate: startDate,
+      dayStart,
+      dayEnd,
+    });
+  } catch (err) {
+    console.warn("偏好分析步骤失败，将仅依赖主生成 prompt:", err.message);
+  }
+
   const userPrompt = buildUserPrompt({
     role,
     preferenceProfile,
-    challengeStartDate: challengeStartDate || formatDateOnly(new Date()),
+    challengeStartDate: startDate,
     dayStart,
     dayEnd,
     iterativeContext: iterativeContext || null,
+    preferenceAnalysis,
   });
 
   try {
@@ -594,20 +616,7 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "AI 返回的计划格式不完整" });
     }
 
-    plans = shapePlansWithProfile(
-      plans,
-      preferenceProfile,
-      role,
-      challengeStartDate || formatDateOnly(new Date()),
-      dayStart,
-      dayEnd
-    );
-
-    const activityDays = detectActivityDays(
-      preferenceProfile?.otherActivities,
-      challengeStartDate || formatDateOnly(new Date()),
-      DAYS
-    );
+    plans = applyLightPlanGuards(plans, preferenceProfile, role, dayStart, dayEnd);
 
     return res.status(200).json({
       plans,
@@ -615,7 +624,7 @@ export default async function handler(req, res) {
         source: "ai",
         fingerprint: buildPersonalizationFingerprint(preferenceProfile, role),
         fitnessLevel: preferenceProfile?.fitnessLevel,
-        activityDays: activityDays.map((item) => ({ day: item.day, label: item.label })),
+        preferenceAnalysis,
         dayStart,
         dayEnd,
       },

@@ -2,7 +2,7 @@ import { DAYS } from "./constants";
 import { dayKey } from "./challenge";
 import { getBasePlan } from "./plans";
 import { normalizePreferenceProfile, createDefaultPreferenceProfileForRole } from "./preferenceProfile";
-import { shapePlansWithProfile } from "../lib/planPersonalization.js";
+import { applyLightPlanGuards } from "../lib/planPersonalization.js";
 import {
   buildWeekReview,
   formatPriorPlansForPrompt,
@@ -115,7 +115,7 @@ async function requestGeneratedPlanChunk(
     throw new Error(`第 ${dayStart}–${dayEnd} 天计划不完整`);
   }
   const normalizedProfile = normalizePreferenceProfile(preferenceProfile, "", role);
-  return shapePlansWithProfile(data.plans, normalizedProfile, role, challengeStartDate, dayStart, dayEnd);
+  return applyLightPlanGuards(data.plans, normalizedProfile, role, dayStart, dayEnd);
 }
 
 export async function generatePlanChunkForRole(challenge, role, chunk) {

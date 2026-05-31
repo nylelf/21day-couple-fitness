@@ -6,9 +6,7 @@ import { formatChinesePrimary } from "./formatLabels";
 import { getDefaultGoalForRole, getGoalLabels } from "./preferenceProfile";
 import { parseDateOnly, addDays, formatDateOnly } from "./dateUtils";
 import {
-  applyProfileToPlan,
-  buildActivityRecoveryPlan,
-  detectActivityDays,
+  applyLightPlanGuard,
   getSplitDayLabel,
   getTemplateKeyForDay,
 } from "../lib/planPersonalization.js";
@@ -203,34 +201,13 @@ function buildPlanItem(day, key, templates, profile, role) {
     meals,
     habits: formatMealsAsHabits(meals),
   };
-  return applyProfileToPlan(plan, profile, role);
+  return applyLightPlanGuard(plan, profile, role);
 }
 
 function buildDynamicPlan(role, day, challengeStartDate, preferenceProfile = null) {
   const profile = preferenceProfile
     ? normalizePreferenceProfile(preferenceProfile, "", role)
     : null;
-
-  if (profile?.otherActivities) {
-    const activityDays = detectActivityDays(profile.otherActivities, challengeStartDate);
-    const hit = activityDays.find((item) => item.day === day);
-    if (hit) {
-      const recovery = buildActivityRecoveryPlan(day, hit.label);
-      return applyProfileToPlan(
-        {
-          ...recovery,
-          habits: recovery.meals
-            ? [
-                `早餐：${recovery.meals.breakfast}`,
-                `练后餐：${recovery.meals.postWorkout}`,
-              ]
-            : [],
-        },
-        profile,
-        role
-      );
-    }
-  }
 
   const targetDate = getDateForDay(challengeStartDate, day);
   const weekday = getWeekdayIndex(targetDate);
