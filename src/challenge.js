@@ -70,6 +70,10 @@ export function normalizeChallenge(data) {
       male: data.messages?.male || {},
       female: data.messages?.female || {},
     },
+    cheersFrom: {
+      male: data.cheersFrom?.male || {},
+      female: data.cheersFrom?.female || {},
+    },
     planMeta: {
       male: getPlanMetaForRole(data, ROLE_MALE),
       female: getPlanMetaForRole(data, ROLE_FEMALE),

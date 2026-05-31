@@ -105,6 +105,7 @@ export default function App() {
   const [toastMsg, setToastMsg] = useState("");
   const toastTimerRef = useRef(null);
   const autoGenInFlightRef = useRef(false);
+  const lastSeenPartnerCheerRef = useRef(null);
 
   const currentDay = challenge ? calcCurrentDay(challenge.challengeStartDate) : 1;
   const hasStarted = challenge ? getDateKey(new Date()) >= getDateKey(challenge.challengeStartDate) : true;
@@ -863,6 +864,38 @@ export default function App() {
     );
   }
 
+  function sendCheerToPartner() {
+    if (!challenge || !myRole || screen !== "main") return;
+    const partnerRole = oppositeRole(myRole);
+    const partnerDisplayName = challenge.users[partnerRole]?.name || roleLabel(partnerRole);
+    if (!challenge.users[partnerRole]?.name?.trim()) {
+      showToast("等 TA 加入挑战后再点赞吧");
+      return;
+    }
+    if (!hasStarted) {
+      showToast(`挑战 ${challenge.challengeStartDate} 开始后才能点赞`);
+      return;
+    }
+    const cheerKey = dayKey(currentDay);
+    if (challenge.cheersFrom?.[myRole]?.[cheerKey]) {
+      showToast("今天已经送过爱心啦，明天再来～");
+      return;
+    }
+    mutateChallenge(
+      (prev) => ({
+        ...prev,
+        cheersFrom: {
+          ...prev.cheersFrom,
+          [myRole]: {
+            ...(prev.cheersFrom?.[myRole] || {}),
+            [cheerKey]: new Date().toISOString(),
+          },
+        },
+      }),
+      `已给 ${partnerDisplayName} 送去爱心鼓励 💕`
+    );
+  }
+
   function copyInvite() {
     const text = `我们在做 21 天情侣健身挑战，邀请码：${inviteCode}\n你可以输入邀请码加入并选择你的身份。`;
     navigator.clipboard?.writeText(text);
@@ -888,6 +921,17 @@ export default function App() {
       setMessageDraft(challenge?.messages?.[myRole]?.[dKey] || "");
     }
   }, [challenge, myRole, viewingRole, dKey]);
+
+  useEffect(() => {
+    if (!challenge || !myRole || screen !== "main" || !hasStarted) return;
+    const partnerRole = oppositeRole(myRole);
+    const cheerKey = dayKey(currentDay);
+    const sentAt = challenge.cheersFrom?.[partnerRole]?.[cheerKey];
+    if (!sentAt || sentAt === lastSeenPartnerCheerRef.current) return;
+    lastSeenPartnerCheerRef.current = sentAt;
+    const name = challenge.users[partnerRole]?.name || roleLabel(partnerRole);
+    showToast(`${name} 给你点了爱心 💕`);
+  }, [challenge?.cheersFrom, challenge?.users, myRole, currentDay, screen, hasStarted]);
 
   useEffect(() => {
     if (!challenge || !myRole || !inviteCode || !supabase || screen !== "main") return;
@@ -1346,6 +1390,9 @@ export default function App() {
   const meName = challenge.users[myRole]?.name || myNickname || roleLabel(myRole);
   const partner = oppositeRole(myRole);
   const partnerName = challenge.users[partner]?.name || roleLabel(partner);
+  const todayCheerKey = dayKey(currentDay);
+  const iCheeredPartnerToday = Boolean(challenge.cheersFrom?.[myRole]?.[todayCheerKey]);
+  const partnerCheeredMeToday = Boolean(challenge.cheersFrom?.[partner]?.[todayCheerKey]);
   const selectedChallengeDate = getChallengeDateForDay(challenge.challengeStartDate, selectedDay);
   const challengeEndDateObj = getChallengeDateForDay(challenge.challengeStartDate, DAYS);
 
@@ -1358,13 +1405,26 @@ export default function App() {
               <h1 className="app-title">21天情侣健身挑战</h1>
               <p className="app-subtitle">{`邀请码：${inviteCode} ｜ ${meName} × ${partnerName}`}</p>
             </div>
-            <div className="icon-pill"><Heart size={22} /></div>
+            <button
+              type="button"
+              className={`icon-pill heart-btn ${iCheeredPartnerToday ? "is-cheered" : ""}`}
+              onClick={sendCheerToPartner}
+              aria-label="给 TA 点赞"
+              title={iCheeredPartnerToday ? "今天已送爱心" : "给 TA 一个爱心鼓励"}
+            >
+              <Heart size={22} fill={iCheeredPartnerToday ? "currentColor" : "none"} />
+            </button>
           </div>
         </div>
 
         <Card className="card glass-card">
           <CardContent className="card-content">
             <div className="sync-line"><Cloud size={16} /> {syncStatus}</div>
+            {partnerCheeredMeToday ? (
+              <div className="info-box cheer-received-banner">
+                💕 {partnerName} 今天给你点了爱心，继续一起加油！
+              </div>
+            ) : null}
             {planBackgroundGenerating ? (
               <div className="info-box plan-bg-gen-note">
                 ⏳ {planBackgroundLabel || "正在根据打卡数据生成后续计划…"}
