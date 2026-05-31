@@ -3,7 +3,12 @@ import {
   buildPersonalizationFingerprint,
   buildPersonalizationPromptBlock,
   applyLightPlanGuards,
+  applyActivityDaysToPlans,
 } from "../lib/planPersonalization.js";
+import {
+  getDetectedActivityDaysInRange,
+  mergeDetectedIntoActivitySchedule,
+} from "../lib/activitySchedule.js";
 import { formatPreferenceAnalysisForPlanPrompt } from "../lib/preferenceAnalysisPrompt.js";
 import { getPeriodDaysInChallenge } from "../lib/periodSchedule.js";
 
@@ -104,7 +109,7 @@ const SYSTEM_PROMPT = `你必须用中文回复，所有内容包括动作名称
 你是一位专业健身教练，擅长为情侣制定科学的个性化训练计划与一日六餐饮食方案。
 【核心原则】
 1. 必须综合理解学员全部偏好（性别、等级、目标、器材、时长、分化、每周其他运动原文、女生经期数据、伤病备注），禁止套用固定模板
-2. 「每周其他运动」为自由文本（如周日爬山、周一羽毛球、周四芭蕾等），由你自行读懂并安排对应日期，不要用固定动作表覆盖
+2. 「每周其他运动」为自由文本；系统会解析星期几并落地为运动日恢复计划，对应日 title 须含运动名、仅拉伸恢复
 3. L1 与 L4（及其他等级）在组数、次数、休息、动作难度上必须明显不同
 请严格只返回 JSON，不要任何解释、标题或 markdown 格式。
 title 示例："推日 · 胸+三头（Push Day · Chest + Triceps）"、"篮球日（Basketball Day）"、"第8天 · 拉日 · 背部（Pull Day）"。
@@ -534,9 +539,30 @@ export default async function handler(req, res) {
       dayStart,
       dayEnd,
     });
+    const detectedActivities = getDetectedActivityDaysInRange(
+      preferenceProfile,
+      startDate,
+      dayStart,
+      dayEnd
+    );
+    preferenceAnalysis = mergeDetectedIntoActivitySchedule(
+      preferenceAnalysis,
+      detectedActivities
+    );
   } catch (err) {
     console.warn("偏好分析步骤失败，将仅依赖主生成 prompt:", err.message);
   }
+
+  const detectedActivityDays = getDetectedActivityDaysInRange(
+    preferenceProfile,
+    startDate,
+    dayStart,
+    dayEnd
+  );
+  preferenceAnalysis = mergeDetectedIntoActivitySchedule(
+    preferenceAnalysis,
+    detectedActivityDays
+  );
 
   const userPrompt = buildUserPrompt({
     role,
@@ -584,6 +610,9 @@ export default async function handler(req, res) {
     }
 
     plans = applyLightPlanGuards(plans, preferenceProfile, role, dayStart, dayEnd);
+    if (detectedActivityDays.length) {
+      plans = applyActivityDaysToPlans(plans, detectedActivityDays, dayStart, dayEnd);
+    }
 
     return res.status(200).json({
       plans,
@@ -592,6 +621,7 @@ export default async function handler(req, res) {
         fingerprint: buildPersonalizationFingerprint(preferenceProfile, role),
         fitnessLevel: preferenceProfile?.fitnessLevel,
         preferenceAnalysis,
+        detectedActivityDays,
         dayStart,
         dayEnd,
       },

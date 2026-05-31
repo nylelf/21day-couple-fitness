@@ -2,7 +2,7 @@ import { DAYS } from "./constants";
 import { dayKey } from "./challenge";
 import { getBasePlan } from "./plans";
 import { normalizePreferenceProfile, createDefaultPreferenceProfileForRole } from "./preferenceProfile";
-import { applyLightPlanGuards } from "../lib/planPersonalization.js";
+import { applyLightPlanGuards, applyActivityDaysToPlans, detectActivityDays } from "../lib/planPersonalization.js";
 import {
   buildWeekReview,
   formatPriorPlansForPrompt,
@@ -115,7 +115,16 @@ async function requestGeneratedPlanChunk(
     throw new Error(`第 ${dayStart}–${dayEnd} 天计划不完整`);
   }
   const normalizedProfile = normalizePreferenceProfile(preferenceProfile, "", role);
-  return applyLightPlanGuards(data.plans, normalizedProfile, role, dayStart, dayEnd);
+  let plans = applyLightPlanGuards(data.plans, normalizedProfile, role, dayStart, dayEnd);
+  const activityDays = detectActivityDays(
+    normalizedProfile.otherActivities,
+    challengeStartDate,
+    21
+  ).filter((item) => item.day >= dayStart && item.day <= dayEnd);
+  if (activityDays.length) {
+    plans = applyActivityDaysToPlans(plans, activityDays, dayStart, dayEnd);
+  }
+  return plans;
 }
 
 export async function generatePlanChunkForRole(challenge, role, chunk) {
