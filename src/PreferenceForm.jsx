@@ -164,7 +164,7 @@ export default function PreferenceForm({ role, value, onChange }) {
           className="text-area"
           value={value.otherActivities || ""}
           onChange={(event) => patch({ otherActivities: event.target.value })}
-          placeholder="例如：周五打篮球、周日跑步5km"
+          placeholder="例如：周五打篮球、周日篮球；周四晚上芭蕾课（写清星期几）"
         />
       </div>
 

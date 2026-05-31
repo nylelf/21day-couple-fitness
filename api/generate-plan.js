@@ -2,6 +2,7 @@ import {
   buildPersonalizationFingerprint,
   buildPersonalizationPromptBlock,
   detectActivityDays,
+  shapePlansWithProfile,
 } from "../lib/planPersonalization.js";
 
 const MODEL = "claude-haiku-4-5-20251001";
@@ -588,16 +589,33 @@ export default async function handler(req, res) {
       .trim();
 
     const parsed = extractJsonObject(text);
-    const plans = normalizeGeneratedPlan(parsed, dayStart, dayEnd, role);
+    let plans = normalizeGeneratedPlan(parsed, dayStart, dayEnd, role);
     if (!plans) {
       return res.status(502).json({ error: "AI 返回的计划格式不完整" });
     }
+
+    plans = shapePlansWithProfile(
+      plans,
+      preferenceProfile,
+      role,
+      challengeStartDate || formatDateOnly(new Date()),
+      dayStart,
+      dayEnd
+    );
+
+    const activityDays = detectActivityDays(
+      preferenceProfile?.otherActivities,
+      challengeStartDate || formatDateOnly(new Date()),
+      DAYS
+    );
 
     return res.status(200).json({
       plans,
       meta: {
         source: "ai",
         fingerprint: buildPersonalizationFingerprint(preferenceProfile, role),
+        fitnessLevel: preferenceProfile?.fitnessLevel,
+        activityDays: activityDays.map((item) => ({ day: item.day, label: item.label })),
         dayStart,
         dayEnd,
       },
