@@ -11,9 +11,10 @@ import {
 } from "./weekReview";
 import { isStoredAiDayPlan, PLAN_CHUNKS } from "./planMeta";
 
-const PLAN_PENDING_PLACEHOLDER = {
+/** Shown when the partner role has not joined yet (empty plan slot). */
+const PLAN_PARTNER_JOIN_PLACEHOLDER = {
   pending: true,
-  title: "等待对方加入后生成专属计划",
+  title: "等你的搭子加入后，这里会出现 TA 的专属计划；你先专注完成自己的第 1–7 天就好 ✨",
   workouts: [],
   habits: [],
 };
@@ -25,34 +26,48 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function createFuturePendingPlan(fromDay) {
-  if (fromDay <= 7) {
-    return { pending: true, title: "等待生成第 1–7 天计划", workouts: [], habits: [] };
-  }
-  if (fromDay <= 14) {
+/** Encouraging copy for days not yet generated (week 2 / week 3). */
+export function createFuturePendingPlan(day) {
+  if (day <= 7) {
     return {
       pending: true,
-      title: "第 8–14 天计划将在第 1 周结束后根据你的打卡数据自动生成",
+      title: "正在根据你的偏好准备第 1–7 天计划，请稍候…",
+      workouts: [],
+      habits: [],
+    };
+  }
+  if (day <= 14) {
+    return {
+      pending: true,
+      title:
+        "坚持得很好！完成第 1 周打卡后，第 8–14 天会根据你的训练表现自动生成，越认真越懂你 💪",
       workouts: [],
       habits: [],
     };
   }
   return {
     pending: true,
-    title: "第 15–21 天计划将在第 2 周结束后根据你的打卡数据自动生成",
+    title:
+      "第 2 周打卡满后，第 15–21 天将为你进阶定制。继续冲，终点就在前面！🎯",
     workouts: [],
     habits: [],
   };
 }
 
+export function getPendingPlanForDay(day) {
+  const safeDay = Math.min(DAYS, Math.max(1, Number(day) || 1));
+  return createFuturePendingPlan(safeDay);
+}
+
 export function createPendingPlan() {
-  return { ...PLAN_PENDING_PLACEHOLDER };
+  return { ...PLAN_PARTNER_JOIN_PLACEHOLDER };
 }
 
 export function buildPendingPlansFromDay(fromDay) {
   const plans = {};
-  for (let day = fromDay; day <= DAYS; day += 1) {
-    plans[dayKey(day)] = createFuturePendingPlan(fromDay);
+  const start = Math.min(DAYS, Math.max(1, Number(fromDay) || 8));
+  for (let day = start; day <= DAYS; day += 1) {
+    plans[dayKey(day)] = createFuturePendingPlan(day);
   }
   return plans;
 }

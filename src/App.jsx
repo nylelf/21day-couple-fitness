@@ -53,6 +53,7 @@ import {
   buildPendingPlansFromDay,
   createPendingPlan,
   generatePlanChunkForRole,
+  getPendingPlanForDay,
   resolveRolePlans,
 } from "./planGeneration";
 import { getNextChunkToGenerate, getPlanMetaForRole, isStoredAiDayPlan } from "./planMeta";
@@ -124,7 +125,20 @@ export default function App() {
         habits: Array.isArray(storedPlan.habits) ? storedPlan.habits : [],
       };
     }
-    return createPendingPlan();
+    if (storedPlan?.pending) {
+      return {
+        pending: true,
+        title: storedPlan.title || getPendingPlanForDay(day).title,
+        workouts: [],
+        habits: [],
+      };
+    }
+    const rolePlans = challenge?.plans?.[role];
+    const hasAnyPlan = rolePlans && Object.keys(rolePlans).length > 0;
+    if (!hasAnyPlan) {
+      return createPendingPlan();
+    }
+    return getPendingPlanForDay(day);
   };
   const selectedPlan = useMemo(() => {
     if (!challenge) return createPendingPlan();
