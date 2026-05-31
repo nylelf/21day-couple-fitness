@@ -1,3 +1,9 @@
+import {
+  createEmptyWeeklyActivities,
+  formatWeeklyActivitiesText,
+  normalizeWeeklyActivities,
+} from "../lib/weeklyActivities.js";
+
 export const FITNESS_LEVELS = [
   {
     value: "beginner",
@@ -162,8 +168,6 @@ const LEGACY_GOAL_MAP = {
 
 };
 
-
-
 export const DEFAULT_PREFERENCE_PROFILE = {
 
   fitnessLevel: "beginner",
@@ -175,6 +179,8 @@ export const DEFAULT_PREFERENCE_PROFILE = {
   sessionDuration: 60,
 
   trainingSplit: "push_pull_legs",
+
+  weeklyActivities: createEmptyWeeklyActivities(),
 
   otherActivities: "",
 
@@ -330,6 +336,8 @@ function migrateLegacyProfile(profile, fallbackText = "") {
 
     sessionDuration: profile.quickMode ? 30 : 60,
 
+    weeklyActivities: createEmptyWeeklyActivities(),
+
     otherActivities: "",
 
     healthNotes: healthParts.join("；"),
@@ -368,7 +376,12 @@ export function normalizePreferenceProfile(profile, fallbackText = "", role = ""
 
     trainingSplit: TRAINING_SPLIT_SET.has(source.trainingSplit) ? source.trainingSplit : DEFAULT_PREFERENCE_PROFILE.trainingSplit,
 
-    otherActivities: normalizePreferenceText(source.otherActivities),
+    weeklyActivities: normalizeWeeklyActivities(source.weeklyActivities, source.otherActivities),
+
+    otherActivities:
+      formatWeeklyActivitiesText(
+        normalizeWeeklyActivities(source.weeklyActivities, source.otherActivities)
+      ) || normalizePreferenceText(source.otherActivities),
 
     healthNotes: normalizePreferenceText(source.healthNotes),
 
@@ -422,7 +435,8 @@ export function profileSummary(profile, role = "") {
 
   ];
 
-  if (normalized.otherActivities) parts.push(normalized.otherActivities);
+  const activitySummary = formatWeeklyActivitiesText(normalized.weeklyActivities);
+  if (activitySummary) parts.push(activitySummary);
 
   if (normalized.healthNotes) parts.push(normalized.healthNotes);
 

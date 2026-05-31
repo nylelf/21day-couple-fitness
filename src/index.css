@@ -555,6 +555,38 @@ body {
   color: #b9a3d4;
 }
 
+.weekly-activities-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.weekly-activity-row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.weekly-activity-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: #e8dcff;
+  cursor: pointer;
+}
+
+.weekly-activity-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #a855f7;
+}
+
+.weekly-activity-input:disabled {
+  opacity: 0.45;
+}
+
 .pref-section-title {
   font-size: 0.9rem;
   font-weight: 600;

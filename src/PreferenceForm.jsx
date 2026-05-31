@@ -6,7 +6,63 @@ import {
   SESSION_DURATIONS,
   TRAINING_SPLITS,
 } from "./preferenceProfile";
+import {
+  formatWeeklyActivitiesText,
+  normalizeWeeklyActivities,
+  WEEKDAY_LABELS,
+} from "../lib/weeklyActivities.js";
 import { Button } from "./components/ui";
+
+function WeeklyActivitiesEditor({ value, onChange }) {
+  const weekly = normalizeWeeklyActivities(value?.weeklyActivities, value?.otherActivities);
+
+  function commit(nextWeekly) {
+    onChange({
+      weeklyActivities: nextWeekly,
+      otherActivities: formatWeeklyActivitiesText(nextWeekly),
+    });
+  }
+
+  function patchDay(index, patch) {
+    const next = weekly.map((slot, i) => (i === index ? { ...slot, ...patch } : slot));
+    commit(next);
+  }
+
+  return (
+    <div className="weekly-activities-list">
+      {WEEKDAY_LABELS.map((label, index) => {
+        const slot = weekly[index];
+        const inputId = `weekly-activity-${index}`;
+        return (
+          <div key={label} className="weekly-activity-row">
+            <label className="weekly-activity-check" htmlFor={inputId}>
+              <input
+                id={inputId}
+                type="checkbox"
+                checked={Boolean(slot.enabled)}
+                onChange={(event) =>
+                  patchDay(index, {
+                    enabled: event.target.checked,
+                    activity: event.target.checked ? slot.activity : "",
+                  })
+                }
+              />
+              <span>{label}</span>
+            </label>
+            <input
+              className="text-input weekly-activity-input"
+              type="text"
+              disabled={!slot.enabled}
+              value={slot.activity}
+              placeholder={slot.enabled ? "填写运动，如：篮球、羽毛球、芭蕾" : "先勾选本日"}
+              onChange={(event) => patchDay(index, { activity: event.target.value })}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function OptionGroup({ label, options, value, onChange }) {
   return (
@@ -160,13 +216,10 @@ export default function PreferenceForm({ role, value, onChange }) {
 
       <div className="pref-field">
         <div className="pref-field-label">每周其他运动（可选）</div>
-        <div className="pref-field-hint">用自然语言描述即可，AI 会理解。例如：周日爬山、周一羽毛球、周四晚上芭蕾课</div>
-        <textarea
-          className="text-area"
-          value={value.otherActivities || ""}
-          onChange={(event) => patch({ otherActivities: event.target.value })}
-          placeholder="例如：周日去爬山；周一打羽毛球；周四晚上芭蕾课；周五打篮球"
-        />
+        <div className="pref-field-hint">
+          勾选有训练的星期几，并在右侧填写具体运动；计划会按日历自动对应到 21 天挑战中的相应日期。
+        </div>
+        <WeeklyActivitiesEditor value={value} onChange={(fields) => patch(fields)} />
       </div>
 
       <div className="pref-field">

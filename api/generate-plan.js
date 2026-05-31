@@ -14,6 +14,7 @@ import {
   getPeriodDaysInRange,
   mergeDetectedIntoPeriodSchedule,
 } from "../lib/periodSchedule.js";
+import { formatWeeklyActivitiesText } from "../lib/weeklyActivities.js";
 
 const MODEL = "claude-haiku-4-5-20251001";
 const DAYS = 21;
@@ -207,7 +208,10 @@ function buildUserPrompt({
   const duration = profile.sessionDuration ? `${profile.sessionDuration}分钟` : "未填写";
   const trainingSplit = TRAINING_SPLIT_LABELS[profile.trainingSplit] || profile.trainingSplit || "未填写";
   const trainingSplitGuide = TRAINING_SPLIT_GUIDE[profile.trainingSplit] || "按用户选择的训练分化安排每日训练部位";
-  const otherActivities = profile.otherActivities?.trim() || "无";
+  const otherActivities =
+    formatWeeklyActivitiesText(profile?.weeklyActivities) ||
+    profile.otherActivities?.trim() ||
+    "无";
   const healthNotes = profile.healthNotes?.trim() || "无";
   const dayKeys = [];
   for (let day = dayStart; day <= dayEnd; day += 1) {
