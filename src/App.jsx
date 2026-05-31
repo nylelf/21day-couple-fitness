@@ -116,12 +116,12 @@ export default function App() {
   const currentDay = challenge ? calcCurrentDay(challenge.challengeStartDate) : 1;
   const hasStarted = challenge ? getDateKey(new Date()) >= getDateKey(challenge.challengeStartDate) : true;
   const viewingRole = activeRole;
+  const dKey = dayKey(selectedDay);
   const canEdit = challenge && hasStarted && viewingRole === myRole && selectedDay === currentDay;
   const canEditTodayNotes = canEdit;
   const noteLockedAt = challenge?.notesLocked?.[myRole]?.[dKey] || "";
   const isNoteLocked = Boolean(noteLockedAt) && viewingRole === myRole;
   const noteFieldEditable = canEditTodayNotes && (!isNoteLocked || noteEditing);
-  const dKey = dayKey(selectedDay);
   const getEffectivePlan = (role, day) => {
     const key = dayKey(day);
     const storedPlan = challenge?.plans?.[role]?.[key];
