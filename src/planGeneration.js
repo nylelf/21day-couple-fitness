@@ -1,8 +1,8 @@
 import { DAYS } from "./constants";
 import { dayKey } from "./challenge";
 import { getBasePlan } from "./plans";
-import { normalizePreferenceProfile, createDefaultPreferenceProfileForRole } from "./preferenceProfile";
-import { applyLightPlanGuards, applyActivityDaysToPlans, detectActivityDays } from "../lib/planPersonalization.js";
+import { normalizePreferenceProfile } from "./preferenceProfile";
+import { finalizePlansWithProfile } from "../lib/planPersonalization.js";
 import {
   buildWeekReview,
   formatPriorPlansForPrompt,
@@ -17,6 +17,13 @@ const PLAN_PENDING_PLACEHOLDER = {
   workouts: [],
   habits: [],
 };
+
+const PLAN_API_RETRIES = 2;
+const PLAN_API_RETRY_DELAY_MS = 1500;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function createFuturePendingPlan(fromDay) {
   if (fromDay <= 7) {
@@ -59,22 +66,24 @@ export function buildAllPendingPlans() {
 }
 
 function buildFallbackPlansForRange(role, challengeStartDate, dayStart, dayEnd, preferenceProfile) {
+  const normalizedProfile = normalizePreferenceProfile(preferenceProfile, "", role);
   const plans = {};
   for (let day = dayStart; day <= dayEnd; day += 1) {
-    plans[dayKey(day)] = getBasePlan(role, day, challengeStartDate, preferenceProfile);
+    plans[dayKey(day)] = getBasePlan(role, day, challengeStartDate, normalizedProfile);
   }
-  return plans;
+  return finalizePlansWithProfile(plans, normalizedProfile, role, challengeStartDate, dayStart, dayEnd);
 }
 
 function fillMissingPlanDaysInRange(plans, role, challengeStartDate, dayStart, dayEnd, preferenceProfile) {
+  const normalizedProfile = normalizePreferenceProfile(preferenceProfile, "", role);
   const filled = { ...(plans || {}) };
   for (let day = dayStart; day <= dayEnd; day += 1) {
     const key = dayKey(day);
     if (!isStoredAiDayPlan(filled[key])) {
-      filled[key] = getBasePlan(role, day, challengeStartDate, preferenceProfile);
+      filled[key] = getBasePlan(role, day, challengeStartDate, normalizedProfile);
     }
   }
-  return filled;
+  return finalizePlansWithProfile(filled, normalizedProfile, role, challengeStartDate, dayStart, dayEnd);
 }
 
 function mergeWeekOnePlans(role, challengeStartDate, chunkPlans, usedFallback, preferenceProfile) {
@@ -92,39 +101,50 @@ async function requestGeneratedPlanChunk(
   dayEnd,
   iterativeContext = null
 ) {
-  const response = await fetch("/api/generate-plan", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      role,
-      preferenceProfile: normalizePreferenceProfile(preferenceProfile, "", role),
-      challengeStartDate,
-      dayStart,
-      dayEnd,
-      iterativeContext,
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "计划生成失败");
-  }
-  if (!data.plans || typeof data.plans !== "object") {
-    throw new Error("计划生成失败");
-  }
-  if (!isStoredAiDayPlan(data.plans[dayKey(dayStart)])) {
-    throw new Error(`第 ${dayStart}–${dayEnd} 天计划不完整`);
-  }
   const normalizedProfile = normalizePreferenceProfile(preferenceProfile, "", role);
-  let plans = applyLightPlanGuards(data.plans, normalizedProfile, role, dayStart, dayEnd);
-  const activityDays = detectActivityDays(
-    normalizedProfile.otherActivities,
-    challengeStartDate,
-    21
-  ).filter((item) => item.day >= dayStart && item.day <= dayEnd);
-  if (activityDays.length) {
-    plans = applyActivityDaysToPlans(plans, activityDays, dayStart, dayEnd);
+  let lastError = new Error("计划生成失败");
+
+  for (let attempt = 0; attempt < PLAN_API_RETRIES; attempt += 1) {
+    try {
+      const response = await fetch("/api/generate-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role,
+          preferenceProfile: normalizedProfile,
+          challengeStartDate,
+          dayStart,
+          dayEnd,
+          iterativeContext,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `计划生成失败 (${response.status})`);
+      }
+      if (!data.plans || typeof data.plans !== "object") {
+        throw new Error("计划生成失败");
+      }
+      if (!isStoredAiDayPlan(data.plans[dayKey(dayStart)])) {
+        throw new Error(`第 ${dayStart}–${dayEnd} 天计划不完整`);
+      }
+      return finalizePlansWithProfile(
+        data.plans,
+        normalizedProfile,
+        role,
+        challengeStartDate,
+        dayStart,
+        dayEnd
+      );
+    } catch (err) {
+      lastError = err;
+      if (attempt < PLAN_API_RETRIES - 1) {
+        await sleep(PLAN_API_RETRY_DELAY_MS);
+      }
+    }
   }
-  return plans;
+
+  throw lastError;
 }
 
 export async function generatePlanChunkForRole(challenge, role, chunk) {
@@ -152,10 +172,18 @@ export async function generatePlanChunkForRole(challenge, role, chunk) {
       iterativeContext
     );
     return {
-      plans: fillMissingPlanDaysInRange(plans, role, challenge.challengeStartDate, chunk.start, chunk.end, preferenceProfile),
+      plans: fillMissingPlanDaysInRange(
+        plans,
+        role,
+        challenge.challengeStartDate,
+        chunk.start,
+        chunk.end,
+        preferenceProfile
+      ),
       usedFallback: false,
+      fallbackError: null,
     };
-  } catch {
+  } catch (err) {
     return {
       plans: buildFallbackPlansForRange(
         role,
@@ -165,6 +193,7 @@ export async function generatePlanChunkForRole(challenge, role, chunk) {
         preferenceProfile
       ),
       usedFallback: true,
+      fallbackError: err?.message || "计划生成失败",
     };
   }
 }
@@ -186,23 +215,29 @@ export async function resolveRolePlansInitial(role, preferenceProfile, challenge
     const merged = mergeWeekOnePlans(role, challengeStartDate, chunkPlans, false, preferenceProfile);
     onProgressUpdate?.(100, chunk, { ...merged });
     await onChunkComplete?.(chunk, chunkPlans, { ...merged });
-    return { plans: merged, usedFallback: false, generatedThrough: 7 };
-  } catch {
+    return { plans: merged, usedFallback: false, generatedThrough: 7, fallbackError: null };
+  } catch (err) {
     const fallback = mergeWeekOnePlans(role, challengeStartDate, null, true, preferenceProfile);
     onProgressUpdate?.(100, chunk, { ...fallback });
     await onChunkComplete?.(chunk, fallback, { ...fallback });
-    return { plans: fallback, usedFallback: true, generatedThrough: 7 };
+    return {
+      plans: fallback,
+      usedFallback: true,
+      generatedThrough: 7,
+      fallbackError: err?.message || "计划生成失败",
+    };
   }
 }
 
 export async function resolveRolePlans(role, preferenceProfile, challengeStartDate, callbacks = {}) {
   try {
     return await resolveRolePlansInitial(role, preferenceProfile, challengeStartDate, callbacks);
-  } catch {
+  } catch (err) {
     return {
       plans: mergeWeekOnePlans(role, challengeStartDate, null, true, preferenceProfile),
       usedFallback: true,
       generatedThrough: 7,
+      fallbackError: err?.message || "计划生成失败",
     };
   }
 }

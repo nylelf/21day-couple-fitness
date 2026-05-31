@@ -82,7 +82,9 @@ export default function App() {
   const [joinCode, setJoinCode] = useState("");
   const [joinRole, setJoinRole] = useState(ROLE_FEMALE);
   const [joinNickname, setJoinNickname] = useState("");
-  const [joinPreferenceProfile, setJoinPreferenceProfile] = useState(createDefaultPreferenceProfile());
+  const [joinPreferenceProfile, setJoinPreferenceProfile] = useState(
+    createDefaultPreferenceProfileForRole(ROLE_FEMALE)
+  );
   const [joinStep, setJoinStep] = useState("identify");
   const [joinRemoteChallenge, setJoinRemoteChallenge] = useState(null);
   const [joinLookupLoading, setJoinLookupLoading] = useState(false);
@@ -230,7 +232,7 @@ export default function App() {
     setJoinRemoteChallenge(null);
     setJoinLookupLoading(false);
     setJoinIsReturningUpdate(false);
-    setJoinPreferenceProfile(createDefaultPreferenceProfile());
+    setJoinPreferenceProfile(createDefaultPreferenceProfileForRole(joinRole || ROLE_FEMALE));
     setToastMsg("");
   }
 
@@ -549,7 +551,7 @@ export default function App() {
       }
 
       setJoinIsReturningUpdate(false);
-      setJoinPreferenceProfile(createDefaultPreferenceProfile());
+      setJoinPreferenceProfile(createDefaultPreferenceProfileForRole(joinRole || ROLE_FEMALE));
       setJoinStep("preferences");
     } finally {
       setJoinLookupLoading(false);
@@ -570,7 +572,7 @@ export default function App() {
     const existing = joinRemoteChallenge.users?.[joinRole]?.preferenceProfile;
     const preferenceProfile = existing
       ? normalizePreferenceProfile(existing, "", joinRole)
-      : createDefaultPreferenceProfile();
+      : createDefaultPreferenceProfileForRole(joinRole);
     setJoinPreferenceProfile({ ...preferenceProfile });
     setJoinIsReturningUpdate(true);
     setJoinStep("preferences");
@@ -583,7 +585,7 @@ export default function App() {
     setJoinPreferenceProfile(
       existing
         ? { ...normalizePreferenceProfile(existing, "", joinRole) }
-        : createDefaultPreferenceProfile()
+        : createDefaultPreferenceProfileForRole(joinRole)
     );
     setJoinIsReturningUpdate(true);
     setJoinStep("preferences");
@@ -727,7 +729,9 @@ export default function App() {
     }
 
     if (usedFallback) {
-      showToast("AI 未连接，第 1–7 天已用本地模板");
+      showToast(
+        `${roleLabel(joinRole)}计划 AI 生成未完成，已按你填写的偏好（含每周运动、分化等）用本地计划补全。${result.fallbackError ? ` ${result.fallbackError}` : ""}`
+      );
     } else if (!enteredMain) {
       showToast("第 1–7 天计划已生成");
     }
@@ -1199,7 +1203,11 @@ export default function App() {
                 ) : (
                   <Button
                     className="primary-btn full-btn"
-                    onClick={handleJoinCompleteWithPreferences}
+                    onClick={() =>
+                      handleJoinCompleteWithPreferences(
+                        normalizePreferenceProfile(joinPreferenceProfile, "", joinRole)
+                      )
+                    }
                   >
                     {joinIsReturningUpdate ? "保存并重新生成计划" : "加入挑战"}
                   </Button>
@@ -1241,8 +1249,24 @@ export default function App() {
                 placeholder="输入 6 位邀请码"
               />
               <div className="role-toggle-grid">
-                <Button className={`role-btn ${joinRole === ROLE_MALE ? "is-active" : ""}`} onClick={() => setJoinRole(ROLE_MALE)}>♂ 男生</Button>
-                <Button className={`role-btn ${joinRole === ROLE_FEMALE ? "is-active" : ""}`} onClick={() => setJoinRole(ROLE_FEMALE)}>♀ 女生</Button>
+                <Button
+                  className={`role-btn ${joinRole === ROLE_MALE ? "is-active" : ""}`}
+                  onClick={() => {
+                    setJoinRole(ROLE_MALE);
+                    setJoinPreferenceProfile(createDefaultPreferenceProfileForRole(ROLE_MALE));
+                  }}
+                >
+                  ♂ 男生
+                </Button>
+                <Button
+                  className={`role-btn ${joinRole === ROLE_FEMALE ? "is-active" : ""}`}
+                  onClick={() => {
+                    setJoinRole(ROLE_FEMALE);
+                    setJoinPreferenceProfile(createDefaultPreferenceProfileForRole(ROLE_FEMALE));
+                  }}
+                >
+                  ♀ 女生
+                </Button>
               </div>
               <input
                 className="text-input"

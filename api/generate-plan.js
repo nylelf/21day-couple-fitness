@@ -2,8 +2,7 @@ import { analyzePreferencesWithAI } from "./analyzePreferences.js";
 import {
   buildPersonalizationFingerprint,
   buildPersonalizationPromptBlock,
-  applyLightPlanGuards,
-  applyActivityDaysToPlans,
+  finalizePlansWithProfile,
 } from "../lib/planPersonalization.js";
 import {
   getDetectedActivityDaysInRange,
@@ -623,10 +622,14 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "AI 返回的计划格式不完整" });
     }
 
-    plans = applyLightPlanGuards(plans, preferenceProfile, role, dayStart, dayEnd);
-    if (detectedActivityDays.length) {
-      plans = applyActivityDaysToPlans(plans, detectedActivityDays, dayStart, dayEnd);
-    }
+    plans = finalizePlansWithProfile(
+      plans,
+      preferenceProfile,
+      role,
+      startDate,
+      dayStart,
+      dayEnd
+    );
 
     return res.status(200).json({
       plans,

@@ -173,8 +173,8 @@ const femaleTemplates = {
   },
 };
 
-const maleWeekdayCycle = ["chestTriA", "backBiA", "shoulderLegA", "recoveryCore", "basketball", "upperHypertrophy", "basketball"];
-const femaleWeekdayCycle = ["lowerA", "upperA", "cardioRecovery", "balletRecovery", "lowerB", "upperB", "activeRecovery"];
+const maleWeekdayCycle = ["chestTriA", "backBiA", "shoulderLegA", "recoveryCore", "upperHypertrophy", "backBiB", "recoveryCore"];
+const femaleWeekdayCycle = ["lowerA", "upperA", "cardioRecovery", "lowerB", "lowerB", "upperB", "activeRecovery"];
 
 function getDateForDay(startDate, day) {
   return addDays(parseDateOnly(startDate || formatDateOnly(new Date())), day - 1);
