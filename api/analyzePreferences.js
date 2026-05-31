@@ -53,7 +53,7 @@ export async function analyzePreferencesWithAI({
       max_tokens: 2048,
       temperature: 0.2,
       system:
-        "你是偏好分析助手。只返回合法 JSON，不要解释。必须理解用户自然语言描述的其他运动（如爬山、羽毛球、芭蕾、篮球等），并映射到挑战第几天。",
+        "你是偏好分析助手。只返回合法 JSON，不要解释。必须理解用户自然语言描述的其他运动（如爬山、羽毛球、芭蕾、篮球等），并映射到挑战第几天。女生须根据上次经期日期与周期推算 periodSchedule，经期日训练须轻于正常日。",
       messages: [{ role: "user", content: prompt }],
     }),
   });

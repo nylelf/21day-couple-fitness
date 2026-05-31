@@ -5,6 +5,7 @@ import {
   applyLightPlanGuards,
 } from "../lib/planPersonalization.js";
 import { formatPreferenceAnalysisForPlanPrompt } from "../lib/preferenceAnalysisPrompt.js";
+import { getPeriodDaysInChallenge } from "../lib/periodSchedule.js";
 
 const MODEL = "claude-haiku-4-5-20251001";
 const DAYS = 21;
@@ -102,7 +103,7 @@ const TRAINING_SPLIT_GUIDE = {
 const SYSTEM_PROMPT = `你必须用中文回复，所有内容包括动作名称、note、meals、title都必须是中文。动作名称与每日 title 格式必须是：中文名（English），英文只能放在括号内，禁止 English（中文）这种反写格式。禁止输出纯英文句子。
 你是一位专业健身教练，擅长为情侣制定科学的个性化训练计划与一日六餐饮食方案。
 【核心原则】
-1. 必须综合理解学员全部偏好（性别、等级、目标、器材、时长、分化、每周其他运动原文、伤病备注），禁止套用固定模板
+1. 必须综合理解学员全部偏好（性别、等级、目标、器材、时长、分化、每周其他运动原文、女生经期数据、伤病备注），禁止套用固定模板
 2. 「每周其他运动」为自由文本（如周日爬山、周一羽毛球、周四芭蕾等），由你自行读懂并安排对应日期，不要用固定动作表覆盖
 3. L1 与 L4（及其他等级）在组数、次数、休息、动作难度上必须明显不同
 请严格只返回 JSON，不要任何解释、标题或 markdown 格式。
@@ -124,51 +125,6 @@ function formatDateOnly(dateValue) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
-}
-
-function addDays(dateValue, days) {
-  const d = parseDateOnly(dateValue);
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-function daysBetween(fromDate, toDate) {
-  const start = parseDateOnly(fromDate).getTime();
-  const end = parseDateOnly(toDate).getTime();
-  return Math.floor((end - start) / 86400000);
-}
-
-function getPeriodAdjustmentDays(challengeStartDate, lastPeriodDate, cycleLength) {
-  if (!lastPeriodDate) return [];
-
-  const cycle = cycleLength === "irregular" ? 28 : Number(cycleLength) || 28;
-  const challengeStart = parseDateOnly(challengeStartDate || formatDateOnly(new Date()));
-  const challengeEnd = addDays(challengeStart, DAYS - 1);
-
-  let periodStart = parseDateOnly(lastPeriodDate);
-  while (addDays(periodStart, cycle) <= addDays(challengeStart, -cycle)) {
-    periodStart = addDays(periodStart, cycle);
-  }
-  while (addDays(periodStart, -cycle) >= addDays(challengeStart, -cycle)) {
-    periodStart = addDays(periodStart, -cycle);
-  }
-
-  const adjustments = [];
-  for (let challengeDay = 1; challengeDay <= DAYS; challengeDay += 1) {
-    const challengeDate = addDays(challengeStart, challengeDay - 1);
-    let cursor = parseDateOnly(periodStart);
-
-    while (cursor <= challengeEnd) {
-      const periodDay = daysBetween(cursor, challengeDate) + 1;
-      if (periodDay >= 1 && periodDay <= 5) {
-        adjustments.push({ challengeDay, periodDay, date: formatDateOnly(challengeDate) });
-        break;
-      }
-      cursor = addDays(cursor, cycle);
-    }
-  }
-
-  return adjustments;
 }
 
 function isFemaleGluteLegDay(dayPlan, role) {
@@ -283,17 +239,28 @@ ${iterativeContext.priorPlansText || ""}
         : "";
 
   let periodInfo = "";
-  if (role === "female" && profile.lastPeriodDate) {
-    const adjustments = getPeriodAdjustmentDays(
-      challengeStartDate,
-      profile.lastPeriodDate,
-      profile.cycleLength
-    );
-    const periodDays = adjustments.map((item) => item.challengeDay);
-    if (periodDays.length > 0) {
-      periodInfo = `【经期特别安排】\n挑战第 ${periodDays.join("、")} 天为经期，这几天必须：\n- 只安排瑜伽、散步或轻度拉伸\n- meals 全部换成经期友好饮食（补铁、温热易消化），不要高强度训练饮食\n- title注明"经期调整日"\n- workouts的note注明"经期轻度训练"`;
+  if (role === "female" && !preferenceAnalysis) {
+    if (profile.lastPeriodDate) {
+      const adjustments = getPeriodDaysInChallenge(
+        challengeStartDate,
+        profile.lastPeriodDate,
+        profile.cycleLength
+      );
+      const inRange = adjustments.filter(
+        (item) => item.challengeDay >= dayStart && item.challengeDay <= dayEnd
+      );
+      if (inRange.length > 0) {
+        const detail = inRange
+          .map((item) => `第${item.challengeDay}天（经期第${item.periodDay}天）`)
+          .join("、");
+        periodInfo = `【经期特别安排（系统推算）】\n本段 ${detail} 为经期，须：瑜伽/散步/轻度拉伸；经期友好饮食；title「经期调整日」；禁止大重量臀腿冲击`;
+      } else if (adjustments.length > 0) {
+        periodInfo = `\n【经期信息】21天内有经期日（第 ${adjustments.map((a) => a.challengeDay).join("、")} 天），但不在本段 ${dayStart}-${dayEnd}；若接近经期仍适当降低强度。`;
+      } else {
+        periodInfo = `\n【经期信息】上次经期：${profile.lastPeriodDate}，21天内无经期第1-5天重叠；若接近经期仍适当降低强度。`;
+      }
     } else {
-      periodInfo = `\n【经期信息】上次经期第一天：${profile.lastPeriodDate}，21天挑战期内无完整经期第1-5天重叠；若接近经期仍适当降低强度。`;
+      periodInfo = "\n【经期】未填写上次经期日期；若计划期间可能临近经期，适当降低强度。";
     }
   }
 
