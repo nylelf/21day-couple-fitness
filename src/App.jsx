@@ -96,6 +96,7 @@ export default function App() {
   const [aiCoachLoading, setAiCoachLoading] = useState(false);
   const [aiCoachError, setAiCoachError] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
+  const [noteEditing, setNoteEditing] = useState(false);
   const [messageDraft, setMessageDraft] = useState("");
   const [messageSentModal, setMessageSentModal] = useState(false);
   const [planGenerating, setPlanGenerating] = useState(false);
@@ -109,7 +110,6 @@ export default function App() {
   const lastSeenPartnerCheerRef = useRef(null);
   const lastSeenPartnerMessageRef = useRef(null);
   const noteFocusedRef = useRef(false);
-  const noteSaveTimerRef = useRef(null);
   const noteDraftRef = useRef("");
   const noteDraftDayRef = useRef("");
 
@@ -117,7 +117,10 @@ export default function App() {
   const hasStarted = challenge ? getDateKey(new Date()) >= getDateKey(challenge.challengeStartDate) : true;
   const viewingRole = activeRole;
   const canEdit = challenge && hasStarted && viewingRole === myRole && selectedDay === currentDay;
-  const canEditNotes = challenge && hasStarted && viewingRole === myRole && selectedDay <= currentDay;
+  const canEditTodayNotes = canEdit;
+  const noteLockedAt = challenge?.notesLocked?.[myRole]?.[dKey] || "";
+  const isNoteLocked = Boolean(noteLockedAt) && viewingRole === myRole;
+  const noteFieldEditable = canEditTodayNotes && (!isNoteLocked || noteEditing);
   const dKey = dayKey(selectedDay);
   const getEffectivePlan = (role, day) => {
     const key = dayKey(day);
@@ -207,8 +210,9 @@ export default function App() {
       const prefs =
         challenge.users[myRole]?.preferences ||
         profileSummary(challenge.users[myRole]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE, myRole);
-      const todayNote =
-        noteDraftDayRef.current === todayKey ? noteDraftRef.current || noteDraft : challenge.notes?.[myRole]?.[todayKey] || "";
+      const todayNote = noteEditing
+        ? noteDraftRef.current || noteDraft
+        : challenge.notes?.[myRole]?.[todayKey] || "";
 
       const response = await fetch("/api/coach", {
         method: "POST",
@@ -842,8 +846,27 @@ export default function App() {
     }));
   }
 
-  function persistNote(value, dayKeyVal = dKey) {
-    if (!challenge || viewingRole !== myRole) return;
+  function updateNote(value) {
+    if (!noteFieldEditable) return;
+    noteDraftRef.current = value;
+    setNoteDraft(value);
+    noteDraftDayRef.current = dKey;
+  }
+
+  function startNoteEdit() {
+    if (!canEditTodayNotes || !isNoteLocked) return;
+    setNoteEditing(true);
+    noteFocusedRef.current = true;
+  }
+
+  function saveNote() {
+    if (!canEditTodayNotes) return;
+    const value = noteDraftRef.current.trim();
+    if (!value) {
+      showToast("请先填写训练记录再保存");
+      return;
+    }
+    const savedAt = new Date().toISOString();
     mutateChallenge(
       (prev) => ({
         ...prev,
@@ -851,40 +874,21 @@ export default function App() {
           ...prev.notes,
           [myRole]: {
             ...(prev.notes?.[myRole] || {}),
-            [dayKeyVal]: value,
+            [dKey]: value,
+          },
+        },
+        notesLocked: {
+          ...prev.notesLocked,
+          [myRole]: {
+            ...(prev.notesLocked?.[myRole] || {}),
+            [dKey]: savedAt,
           },
         },
       }),
-      "训练记录已保存"
+      "训练记录已保存并锁定"
     );
-  }
-
-  function scheduleNoteSave(value) {
-    if (noteSaveTimerRef.current) {
-      window.clearTimeout(noteSaveTimerRef.current);
-    }
-    noteSaveTimerRef.current = window.setTimeout(() => {
-      persistNote(value);
-      noteSaveTimerRef.current = null;
-    }, 700);
-  }
-
-  function updateNote(value) {
-    if (!canEditNotes) return;
-    noteDraftRef.current = value;
-    setNoteDraft(value);
-    noteDraftDayRef.current = dKey;
-    scheduleNoteSave(value);
-  }
-
-  function flushNoteSave() {
-    if (noteSaveTimerRef.current) {
-      window.clearTimeout(noteSaveTimerRef.current);
-      noteSaveTimerRef.current = null;
-    }
-    if (canEditNotes && viewingRole === myRole) {
-      persistNote(noteDraftRef.current);
-    }
+    setNoteEditing(false);
+    noteFocusedRef.current = false;
   }
 
   function sendMessageToPartner() {
@@ -977,20 +981,13 @@ export default function App() {
   useEffect(() => {
     if (viewingRole !== myRole) return;
     noteDraftDayRef.current = dKey;
+    setNoteEditing(false);
     if (!noteFocusedRef.current) {
       const cloudNote = challenge?.notes?.[myRole]?.[dKey] || "";
       noteDraftRef.current = cloudNote;
       setNoteDraft(cloudNote);
     }
   }, [challenge?.notes, myRole, viewingRole, dKey]);
-
-  useEffect(() => {
-    return () => {
-      if (noteSaveTimerRef.current) {
-        window.clearTimeout(noteSaveTimerRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     if (!challenge || !myRole || screen !== "main" || !hasStarted) return;
@@ -1656,27 +1653,50 @@ export default function App() {
               <>
             <Card className="card glass-card">
               <CardContent className="card-content">
-                <div className="section-title"><Activity size={18} />训练记录</div>
+                <div className="section-title-row">
+                  <div className="section-title"><Activity size={18} />训练记录</div>
+                  {canEditTodayNotes && isNoteLocked && !noteEditing ? (
+                    <span className="note-status-badge is-locked">已保存</span>
+                  ) : null}
+                  {canEditTodayNotes && noteEditing ? (
+                    <span className="note-status-badge is-editing">编辑中</span>
+                  ) : null}
+                </div>
                 <p className="note-field-hint">
-                  {canEditNotes
-                    ? "记录实际训练、饮食或感受（可与计划不同），将用于 AI 建议与后续计划调整"
+                  {canEditTodayNotes
+                    ? isNoteLocked && !noteEditing
+                      ? "今日记录已锁定，点击「编辑」可修改后再次保存"
+                      : "记录实际训练、饮食或感受（可与计划不同），保存后锁定，作为当日完整数据供 AI 分析"
                     : dayPermissionLabel}
                 </p>
                 <textarea
                   value={viewingRole === myRole ? noteDraft : savedNoteText}
                   onChange={(event) => updateNote(event.target.value)}
                   onFocus={() => {
-                    noteFocusedRef.current = true;
+                    if (noteFieldEditable) noteFocusedRef.current = true;
                   }}
                   onBlur={() => {
                     noteFocusedRef.current = false;
-                    flushNoteSave();
                   }}
-                  disabled={!canEditNotes}
+                  readOnly={!noteFieldEditable}
+                  disabled={viewingRole !== myRole}
                   placeholder="例如：今天实际练了 40 分钟胸肩，卧推 60kg×8×4；午餐外食偏油；睡眠 7 小时…"
-                  className="text-area text-area-note"
+                  className={`text-area text-area-note ${isNoteLocked && !noteEditing ? "is-locked" : ""}`}
                   rows={5}
                 />
+                {canEditTodayNotes ? (
+                  <div className="note-actions-row">
+                    {isNoteLocked && !noteEditing ? (
+                      <Button className="ghost-btn note-action-btn" onClick={startNoteEdit}>
+                        编辑
+                      </Button>
+                    ) : (
+                      <Button className="primary-btn note-action-btn" onClick={saveNote}>
+                        保存
+                      </Button>
+                    )}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
 

@@ -73,6 +73,24 @@ function normalizeUser(data, role) {
   };
 }
 
+function normalizeNotesLocked(data) {
+  const roles = [ROLE_MALE, ROLE_FEMALE];
+  const locked = {
+    male: { ...(data.notesLocked?.male || {}) },
+    female: { ...(data.notesLocked?.female || {}) },
+  };
+  const fallbackTs = data.updatedAt || new Date().toISOString();
+
+  for (const role of roles) {
+    for (const [key, text] of Object.entries(data.notes?.[role] || {})) {
+      if (String(text || "").trim() && !locked[role][key]) {
+        locked[role][key] = fallbackTs;
+      }
+    }
+  }
+  return locked;
+}
+
 export function normalizeChallenge(data) {
   if (!data) return null;
   return {
@@ -94,6 +112,7 @@ export function normalizeChallenge(data) {
       male: data.notes?.male || {},
       female: data.notes?.female || {},
     },
+    notesLocked: normalizeNotesLocked(data),
     messagesFrom: normalizeMessagesFrom(data),
     cheersFrom: {
       male: data.cheersFrom?.male || {},
