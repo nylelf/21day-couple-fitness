@@ -1,7 +1,7 @@
 {
     "name": "21day-couple-fitness",
     "private": true,
-    "version": "1.18.0",
+    "version": "1.19.0",
     "type": "module",
     "scripts": {
         "dev": "node ./node_modules/vite/bin/vite.js",

@@ -10,7 +10,11 @@ import {
   mergeDetectedIntoActivitySchedule,
 } from "../lib/activitySchedule.js";
 import { formatPreferenceAnalysisForPlanPrompt } from "../lib/preferenceAnalysisPrompt.js";
-import { getPeriodDaysInChallenge } from "../lib/periodSchedule.js";
+import {
+  getPeriodDaysInChallenge,
+  getPeriodDaysInRange,
+  mergeDetectedIntoPeriodSchedule,
+} from "../lib/periodSchedule.js";
 
 const MODEL = "claude-haiku-4-5-20251001";
 const DAYS = 21;
@@ -258,11 +262,11 @@ ${iterativeContext.priorPlansText || ""}
         const detail = inRange
           .map((item) => `第${item.challengeDay}天（经期第${item.periodDay}天）`)
           .join("、");
-        periodInfo = `【经期特别安排（系统推算）】\n本段 ${detail} 为经期，须：瑜伽/散步/轻度拉伸；经期友好饮食；title「经期调整日」；禁止大重量臀腿冲击`;
+        periodInfo = `【经期特别安排（预测的下一次经期与本段重叠）】\n本段 ${detail} 须：瑜伽/散步/轻度拉伸；经期友好饮食；title「经期调整日」；禁止大重量臀腿冲击`;
       } else if (adjustments.length > 0) {
         periodInfo = `\n【经期信息】21天内有经期日（第 ${adjustments.map((a) => a.challengeDay).join("、")} 天），但不在本段 ${dayStart}-${dayEnd}；若接近经期仍适当降低强度。`;
       } else {
-        periodInfo = `\n【经期信息】上次经期：${profile.lastPeriodDate}，21天内无经期第1-5天重叠；若接近经期仍适当降低强度。`;
+        periodInfo = `\n【经期信息】已根据上次经期与周期推算：21天挑战内无预测经期重叠，本段按正常训练生成（勿自行添加经期调整日）。`;
       }
     } else {
       periodInfo = "\n【经期】未填写上次经期日期；若计划期间可能临近经期，适当降低强度。";
@@ -563,6 +567,16 @@ export default async function handler(req, res) {
     preferenceAnalysis,
     detectedActivityDays
   );
+  if (role === "female" && preferenceProfile?.lastPeriodDate) {
+    const detectedPeriodDays = getPeriodDaysInRange(
+      startDate,
+      preferenceProfile.lastPeriodDate,
+      preferenceProfile.cycleLength,
+      dayStart,
+      dayEnd
+    );
+    preferenceAnalysis = mergeDetectedIntoPeriodSchedule(preferenceAnalysis, detectedPeriodDays);
+  }
 
   const userPrompt = buildUserPrompt({
     role,

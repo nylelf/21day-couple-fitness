@@ -185,6 +185,10 @@ export default function PreferenceForm({ role, value, onChange }) {
 
           <div className="pref-field">
             <div className="pref-field-label">上次经期第一天</div>
+            <p className="pref-field-hint">
+              填写最近一次月经来潮的日期，系统会按周期推算<strong>下一次</strong>
+              经期；只有 21 天挑战正好碰上预测经期时，计划才会安排经期调整日。
+            </p>
             <input
               className="text-input"
               type="date"
