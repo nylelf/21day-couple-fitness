@@ -95,7 +95,9 @@ export default function App() {
   const [aiCoachText, setAiCoachText] = useState("");
   const [aiCoachLoading, setAiCoachLoading] = useState(false);
   const [aiCoachError, setAiCoachError] = useState("");
+  const [noteDraft, setNoteDraft] = useState("");
   const [messageDraft, setMessageDraft] = useState("");
+  const [messageSentModal, setMessageSentModal] = useState(false);
   const [planGenerating, setPlanGenerating] = useState(false);
   const [planProgress, setPlanProgress] = useState(0);
   const [planProgressLabel, setPlanProgressLabel] = useState("");
@@ -105,11 +107,17 @@ export default function App() {
   const toastTimerRef = useRef(null);
   const autoGenInFlightRef = useRef(false);
   const lastSeenPartnerCheerRef = useRef(null);
+  const lastSeenPartnerMessageRef = useRef(null);
+  const noteFocusedRef = useRef(false);
+  const noteSaveTimerRef = useRef(null);
+  const noteDraftRef = useRef("");
+  const noteDraftDayRef = useRef("");
 
   const currentDay = challenge ? calcCurrentDay(challenge.challengeStartDate) : 1;
   const hasStarted = challenge ? getDateKey(new Date()) >= getDateKey(challenge.challengeStartDate) : true;
   const viewingRole = activeRole;
   const canEdit = challenge && hasStarted && viewingRole === myRole && selectedDay === currentDay;
+  const canEditNotes = challenge && hasStarted && viewingRole === myRole && selectedDay <= currentDay;
   const dKey = dayKey(selectedDay);
   const getEffectivePlan = (role, day) => {
     const key = dayKey(day);
@@ -149,8 +157,9 @@ export default function App() {
   const checkedWorkouts = checkin.workouts || {};
   const mealItems = useMemo(() => getPlanMealItems(selectedPlan), [selectedPlan]);
   const checkedHabits = checkin.habits || {};
-  const noteText = challenge?.notes?.[viewingRole]?.[dKey] || "";
-  const dayMessageText = challenge?.messages?.[viewingRole]?.[dKey] || "";
+  const savedNoteText = challenge?.notes?.[viewingRole]?.[dKey] || "";
+  const dayMessageEntry = challenge?.messagesFrom?.[viewingRole]?.[dKey];
+  const dayMessageText = dayMessageEntry?.text || "";
   const doneCount = Object.values(checkedWorkouts).filter(Boolean).length + Object.values(checkedHabits).filter(Boolean).length;
   const totalCount = selectedPlan.workouts.length + mealItems.length;
   const completion = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
@@ -198,7 +207,8 @@ export default function App() {
       const prefs =
         challenge.users[myRole]?.preferences ||
         profileSummary(challenge.users[myRole]?.preferenceProfile || DEFAULT_PREFERENCE_PROFILE, myRole);
-      const todayNote = challenge.notes?.[myRole]?.[todayKey] || "";
+      const todayNote =
+        noteDraftDayRef.current === todayKey ? noteDraftRef.current || noteDraft : challenge.notes?.[myRole]?.[todayKey] || "";
 
       const response = await fetch("/api/coach", {
         method: "POST",
@@ -832,35 +842,84 @@ export default function App() {
     }));
   }
 
-  function updateNote(value) {
-    if (!canEdit) return;
-    mutateChallenge((prev) => ({
-      ...prev,
-      notes: {
-        ...prev.notes,
-        [viewingRole]: {
-          ...prev.notes[viewingRole],
-          [dKey]: value,
-        },
-      },
-    }));
-  }
-
-  function saveMessage() {
-    if (viewingRole !== myRole) return;
+  function persistNote(value, dayKeyVal = dKey) {
+    if (!challenge || viewingRole !== myRole) return;
     mutateChallenge(
       (prev) => ({
         ...prev,
-        messages: {
-          ...prev.messages,
+        notes: {
+          ...prev.notes,
           [myRole]: {
-            ...(prev.messages?.[myRole] || {}),
-            [dKey]: messageDraft,
+            ...(prev.notes?.[myRole] || {}),
+            [dayKeyVal]: value,
           },
         },
       }),
-      "留言已保存"
+      "训练记录已保存"
     );
+  }
+
+  function scheduleNoteSave(value) {
+    if (noteSaveTimerRef.current) {
+      window.clearTimeout(noteSaveTimerRef.current);
+    }
+    noteSaveTimerRef.current = window.setTimeout(() => {
+      persistNote(value);
+      noteSaveTimerRef.current = null;
+    }, 700);
+  }
+
+  function updateNote(value) {
+    if (!canEditNotes) return;
+    noteDraftRef.current = value;
+    setNoteDraft(value);
+    noteDraftDayRef.current = dKey;
+    scheduleNoteSave(value);
+  }
+
+  function flushNoteSave() {
+    if (noteSaveTimerRef.current) {
+      window.clearTimeout(noteSaveTimerRef.current);
+      noteSaveTimerRef.current = null;
+    }
+    if (canEditNotes && viewingRole === myRole) {
+      persistNote(noteDraftRef.current);
+    }
+  }
+
+  function sendMessageToPartner() {
+    if (viewingRole !== myRole || !challenge || !myRole) return;
+    const text = messageDraft.trim();
+    if (!text) {
+      showToast("请先写一点内容再发送");
+      return;
+    }
+    const partnerRole = oppositeRole(myRole);
+    const partnerDisplayName = challenge.users[partnerRole]?.name || roleLabel(partnerRole);
+    if (!challenge.users[partnerRole]?.name?.trim()) {
+      showToast("等 TA 加入挑战后再留言吧");
+      return;
+    }
+    if (!hasStarted) {
+      showToast(`挑战 ${challenge.challengeStartDate} 开始后才能留言`);
+      return;
+    }
+    const sentAt = new Date().toISOString();
+    mutateChallenge(
+      (prev) => ({
+        ...prev,
+        messagesFrom: {
+          ...prev.messagesFrom,
+          [myRole]: {
+            ...(prev.messagesFrom?.[myRole] || {}),
+            [dKey]: { text, sentAt },
+          },
+        },
+      }),
+      `已发送给 ${partnerDisplayName}`
+    );
+    setMessageDraft("");
+    setMessageSentModal(true);
   }
 
   function sendCheerToPartner() {
@@ -916,10 +975,22 @@ export default function App() {
   }, [challenge?.challengeStartDate]);
 
   useEffect(() => {
-    if (viewingRole === myRole) {
-      setMessageDraft(challenge?.messages?.[myRole]?.[dKey] || "");
+    if (viewingRole !== myRole) return;
+    noteDraftDayRef.current = dKey;
+    if (!noteFocusedRef.current) {
+      const cloudNote = challenge?.notes?.[myRole]?.[dKey] || "";
+      noteDraftRef.current = cloudNote;
+      setNoteDraft(cloudNote);
     }
-  }, [challenge, myRole, viewingRole, dKey]);
+  }, [challenge?.notes, myRole, viewingRole, dKey]);
+
+  useEffect(() => {
+    return () => {
+      if (noteSaveTimerRef.current) {
+        window.clearTimeout(noteSaveTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!challenge || !myRole || screen !== "main" || !hasStarted) return;
@@ -931,6 +1002,17 @@ export default function App() {
     const name = challenge.users[partnerRole]?.name || roleLabel(partnerRole);
     showToast(`${name} 给你点了爱心 💕`);
   }, [challenge?.cheersFrom, challenge?.users, myRole, currentDay, screen, hasStarted]);
+
+  useEffect(() => {
+    if (!challenge || !myRole || screen !== "main" || !hasStarted) return;
+    const partnerRole = oppositeRole(myRole);
+    const msgKey = dayKey(currentDay);
+    const sentAt = challenge.messagesFrom?.[partnerRole]?.[msgKey]?.sentAt;
+    if (!sentAt || sentAt === lastSeenPartnerMessageRef.current) return;
+    lastSeenPartnerMessageRef.current = sentAt;
+    const name = challenge.users[partnerRole]?.name || roleLabel(partnerRole);
+    showToast(`${name} 给你留了言 💌`);
+  }, [challenge?.messagesFrom, challenge?.users, myRole, currentDay, screen, hasStarted]);
 
   useEffect(() => {
     if (!challenge || !myRole || !inviteCode || !supabase || screen !== "main") return;
@@ -1392,6 +1474,8 @@ export default function App() {
   const todayCheerKey = dayKey(currentDay);
   const iCheeredPartnerToday = Boolean(challenge.cheersFrom?.[myRole]?.[todayCheerKey]);
   const partnerCheeredMeToday = Boolean(challenge.cheersFrom?.[partner]?.[todayCheerKey]);
+  const partnerMessageEntry = challenge.messagesFrom?.[partner]?.[todayCheerKey];
+  const partnerMessageToday = partnerMessageEntry?.text?.trim() || "";
   const selectedChallengeDate = getChallengeDateForDay(challenge.challengeStartDate, selectedDay);
   const challengeEndDateObj = getChallengeDateForDay(challenge.challengeStartDate, DAYS);
 
@@ -1423,6 +1507,14 @@ export default function App() {
               <div className="info-box cheer-received-banner">
                 💕 {partnerName} 今天给你点了爱心，继续一起加油！
               </div>
+            ) : null}
+            {partnerMessageToday ? (
+              <div className="info-box message-received-banner">
+                💌 {partnerName} 给你留言：{partnerMessageToday}
+              </div>
+            ) : null}
+            {toastMsg ? (
+              <div className="info-box toast-line">{toastMsg}</div>
             ) : null}
             {planBackgroundGenerating ? (
               <div className="info-box plan-bg-gen-note">
@@ -1565,12 +1657,25 @@ export default function App() {
             <Card className="card glass-card">
               <CardContent className="card-content">
                 <div className="section-title"><Activity size={18} />训练记录</div>
+                <p className="note-field-hint">
+                  {canEditNotes
+                    ? "记录实际训练、饮食或感受（可与计划不同），将用于 AI 建议与后续计划调整"
+                    : dayPermissionLabel}
+                </p>
                 <textarea
-                  value={noteText}
+                  value={viewingRole === myRole ? noteDraft : savedNoteText}
                   onChange={(event) => updateNote(event.target.value)}
-                  disabled={!canEdit}
-                  placeholder="记录训练、饮食、睡眠"
-                  className="text-area"
+                  onFocus={() => {
+                    noteFocusedRef.current = true;
+                  }}
+                  onBlur={() => {
+                    noteFocusedRef.current = false;
+                    flushNoteSave();
+                  }}
+                  disabled={!canEditNotes}
+                  placeholder="例如：今天实际练了 40 分钟胸肩，卧推 60kg×8×4；午餐外食偏油；睡眠 7 小时…"
+                  className="text-area text-area-note"
+                  rows={5}
                 />
               </CardContent>
             </Card>
@@ -1581,13 +1686,14 @@ export default function App() {
                 {viewingRole === myRole ? (
                   <>
                     <textarea
-                      className="text-area"
+                      className="text-area text-area-message"
                       value={messageDraft}
                       onChange={(event) => setMessageDraft(event.target.value)}
-                      placeholder="写一句鼓励、感谢或提醒，对方可以看到"
+                      placeholder="写一句鼓励、感谢或提醒，发送后 TA 会在页面顶部看到"
+                      rows={3}
                     />
-                    <Button className="primary-btn full-btn" onClick={saveMessage}>
-                      保存留言
+                    <Button className="primary-btn full-btn" onClick={sendMessageToPartner}>
+                      发送留言
                     </Button>
                   </>
                 ) : (
@@ -1763,6 +1869,18 @@ export default function App() {
             <Button className="danger-btn full-btn" onClick={leaveChallenge}>退出当前挑战</Button>
           </CardContent>
         </Card>
+
+        {messageSentModal ? (
+          <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="message-sent-title">
+            <div className="modal-card">
+              <h3 id="message-sent-title" className="modal-title">留言已发送 💌</h3>
+              <p className="modal-body">TA 打开 App 后会在页面顶部看到你的留言。</p>
+              <Button className="primary-btn full-btn" onClick={() => setMessageSentModal(false)}>
+                确认
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

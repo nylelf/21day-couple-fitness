@@ -80,9 +80,71 @@ button.icon-pill.heart-btn.is-cheered {
 }
 
 .cheer-received-banner {
-  margin-top: 8px;
-  border-color: rgba(251, 113, 133, 0.35);
-  background: rgba(236, 72, 153, 0.12);
+  margin-top: 10px;
+  border-color: rgba(255, 120, 160, 0.45);
+  background: rgba(255, 120, 160, 0.12);
+}
+
+.message-received-banner {
+  margin-top: 10px;
+  border-color: rgba(160, 140, 255, 0.45);
+  background: rgba(160, 140, 255, 0.12);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-field-hint {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #c9b8e0;
+}
+
+.text-area-note,
+.text-area-message {
+  min-height: 120px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.text-area:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(6, 4, 14, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.modal-card {
+  width: min(100%, 360px);
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: linear-gradient(160deg, rgba(38, 24, 58, 0.98), rgba(18, 12, 32, 0.98));
+  padding: 22px 18px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+
+.modal-title {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+  color: #fff;
+}
+
+.modal-body {
+  margin: 0 0 18px;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: #dcc9f2;
 }
 
 .card {

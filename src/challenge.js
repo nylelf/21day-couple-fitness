@@ -24,6 +24,34 @@ export function normalizeCheckinEntry(entry) {
   return { workouts: entry, habits: {} };
 }
 
+/** @returns {{ text: string, sentAt: string } | null} */
+export function normalizeMessageEntry(value) {
+  if (!value) return null;
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text ? { text, sentAt: "" } : null;
+  }
+  const text = String(value.text || "").trim();
+  if (!text) return null;
+  return { text, sentAt: String(value.sentAt || "") };
+}
+
+function normalizeMessagesFrom(data) {
+  const roles = [ROLE_MALE, ROLE_FEMALE];
+  const fromRaw = data.messagesFrom || {};
+  const legacy = data.messages || {};
+  const out = { male: {}, female: {} };
+
+  for (const role of roles) {
+    const merged = { ...(legacy[role] || {}), ...(fromRaw[role] || {}) };
+    for (const [key, raw] of Object.entries(merged)) {
+      const entry = normalizeMessageEntry(raw);
+      if (entry) out[role][key] = entry;
+    }
+  }
+  return out;
+}
+
 export function generateInviteCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
@@ -66,10 +94,7 @@ export function normalizeChallenge(data) {
       male: data.notes?.male || {},
       female: data.notes?.female || {},
     },
-    messages: {
-      male: data.messages?.male || {},
-      female: data.messages?.female || {},
-    },
+    messagesFrom: normalizeMessagesFrom(data),
     cheersFrom: {
       male: data.cheersFrom?.male || {},
       female: data.cheersFrom?.female || {},
