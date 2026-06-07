@@ -1,4 +1,3 @@
-import { analyzePreferencesWithAI } from "./analyzePreferences.js";
 import { formatDateOnly } from "../lib/dateUtils.js";
 import { formatChinesePrimary } from "../lib/formatLabels.js";
 import { extractJsonObject } from "../lib/jsonUtils.js";
@@ -7,18 +6,9 @@ import {
   buildPersonalizationPromptBlock,
   finalizePlansWithProfile,
 } from "../lib/planPersonalization.js";
-import { formatPreferenceAnalysisForPlanPrompt } from "../lib/preferenceAnalysisPrompt.js";
-import {
-  getPeriodDaysInChallenge,
-  getPeriodDaysInRange,
-  mergeDetectedIntoPeriodSchedule,
-} from "../lib/periodSchedule.js";
+import { getPeriodDaysInChallenge } from "../lib/periodSchedule.js";
 import { normalizeGoalsFromProfile, roleDisplayLabel } from "../lib/preferenceUtils.js";
-import {
-  formatWeeklyActivitiesText,
-  getDetectedActivityDaysInRange,
-  mergeDetectedIntoActivitySchedule,
-} from "../lib/weeklyActivities.js";
+import { formatWeeklyActivitiesText } from "../lib/weeklyActivities.js";
 
 const MODEL = "claude-haiku-4-5-20251001";
 const DAYS = 21;
@@ -174,7 +164,6 @@ function buildUserPrompt({
   dayStart = 1,
   dayEnd = DAYS,
   iterativeContext = null,
-  preferenceAnalysis = null,
 }) {
   const profile = preferenceProfile || {};
   const gender = roleDisplayLabel(role);
@@ -203,7 +192,6 @@ function buildUserPrompt({
     dayStart,
     dayEnd
   );
-  const analysisBlock = formatPreferenceAnalysisForPlanPrompt(preferenceAnalysis, dayStart, dayEnd);
 
   const iterativeSection =
     dayStart > 1 && iterativeContext?.weekReviewText
@@ -255,11 +243,11 @@ ${iterativeContext.priorPlansText || ""}
 
   return `${personalizationBlock}
 
-${analysisBlock ? `${analysisBlock}\n\n` : ""}请为以下用户生成 21 天挑战中 **${dayRangeLabel}** 的训练计划（共 ${dayKeys.length} 天，键名必须是 ${dayKeys.join("、")}）。
+请为以下用户生成 21 天挑战中 **${dayRangeLabel}** 的训练计划（共 ${dayKeys.length} 天，键名必须是 ${dayKeys.join("、")}）。
 
 这是完整 21 天计划的分段生成（第 ${dayStart}–${dayEnd} 天）。必须与前后分段在分化顺序、强度递进上保持连贯。
 
-请根据上方偏好数据${analysisBlock ? "与 AI 偏好综合分析" : ""}制定计划（综合分析优先理解用户原文）：
+请根据上方偏好数据制定计划：
 
 【基本信息摘要】
 - 性别：${gender}
@@ -445,40 +433,6 @@ export default async function handler(req, res) {
   }
 
   const startDate = challengeStartDate || formatDateOnly(new Date());
-  let preferenceAnalysis = null;
-  try {
-    preferenceAnalysis = await analyzePreferencesWithAI({
-      apiKey,
-      role,
-      preferenceProfile,
-      challengeStartDate: startDate,
-      dayStart,
-      dayEnd,
-    });
-  } catch (err) {
-    console.warn("偏好分析步骤失败，将仅依赖主生成 prompt:", err.message);
-  }
-
-  const detectedActivityDays = getDetectedActivityDaysInRange(
-    preferenceProfile,
-    startDate,
-    dayStart,
-    dayEnd
-  );
-  preferenceAnalysis = mergeDetectedIntoActivitySchedule(
-    preferenceAnalysis,
-    detectedActivityDays
-  );
-  if (role === "female" && preferenceProfile?.lastPeriodDate) {
-    const detectedPeriodDays = getPeriodDaysInRange(
-      startDate,
-      preferenceProfile.lastPeriodDate,
-      preferenceProfile.cycleLength,
-      dayStart,
-      dayEnd
-    );
-    preferenceAnalysis = mergeDetectedIntoPeriodSchedule(preferenceAnalysis, detectedPeriodDays);
-  }
 
   const userPrompt = buildUserPrompt({
     role,
@@ -487,7 +441,6 @@ export default async function handler(req, res) {
     dayStart,
     dayEnd,
     iterativeContext: iterativeContext || null,
-    preferenceAnalysis,
   });
 
   try {
@@ -540,8 +493,6 @@ export default async function handler(req, res) {
         source: "ai",
         fingerprint: buildPersonalizationFingerprint(preferenceProfile, role),
         fitnessLevel: preferenceProfile?.fitnessLevel,
-        preferenceAnalysis,
-        detectedActivityDays,
         dayStart,
         dayEnd,
       },
