@@ -1016,10 +1016,12 @@ export default function App() {
     if (planGenerating || autoGenInFlightRef.current) return;
 
     const meta = getPlanMetaForRole(challenge, myRole);
-    if (meta.generating) return;
 
     const chunk = getNextChunkToGenerate(currentDay, meta.generatedThrough);
     if (!chunk || chunk.start === 1) return;
+
+    // 等前一周完全结束（进入新一周的第1天）再触发，确保 weekReview 数据完整。
+    if (currentDay < chunk.start) return;
 
     let cancelled = false;
 
@@ -1035,7 +1037,9 @@ export default function App() {
 
         const fresh = normalizeChallenge(latestResult.data.data);
         const freshMeta = getPlanMetaForRole(fresh, myRole);
-        if (freshMeta.generating || freshMeta.generatedThrough >= chunk.end) return;
+        if (freshMeta.generatedThrough >= chunk.end) return;
+        // 若 generating 锁定的是同一个 chunk，视为上次崩溃留下的 stale lock，允许覆盖重试。
+        if (freshMeta.generating && freshMeta.generating !== chunk.start) return;
 
         locking = {
           ...fresh,

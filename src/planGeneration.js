@@ -27,7 +27,7 @@ function sleep(ms) {
 }
 
 /** Encouraging copy for days not yet generated (week 2 / week 3). */
-export function createFuturePendingPlan(day) {
+function createFuturePendingPlan(day) {
   if (day <= 7) {
     return {
       pending: true,
@@ -213,7 +213,7 @@ export async function generatePlanChunkForRole(challenge, role, chunk) {
   }
 }
 
-export async function resolveRolePlansInitial(role, preferenceProfile, challengeStartDate, callbacks = {}) {
+async function resolveRolePlansInitial(role, preferenceProfile, challengeStartDate, callbacks = {}) {
   const chunk = PLAN_CHUNKS[0];
   const { onChunkComplete, onProgressUpdate } = callbacks;
 

@@ -1,4 +1,4 @@
-const MODEL = "claude-sonnet-4-6";
+const MODEL = "claude-haiku-4-5-20251001";
 
 function roleDisplay(role) {
   return role === "male" ? "男生" : role === "female" ? "女生" : "学员";

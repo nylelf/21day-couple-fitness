@@ -36,7 +36,7 @@ export const PLAN_CHUNKS = [
 export function getNextChunkToGenerate(currentDay, generatedThrough) {
   if (generatedThrough >= 21) return null;
   if (generatedThrough < 7) return PLAN_CHUNKS[0];
-  if (generatedThrough < 14 && currentDay >= 8) return PLAN_CHUNKS[1];
-  if (generatedThrough < 21 && currentDay >= 15) return PLAN_CHUNKS[2];
+  if (generatedThrough < 14 && currentDay > 7) return PLAN_CHUNKS[1];
+  if (generatedThrough < 21 && currentDay > 14) return PLAN_CHUNKS[2];
   return null;
 }
